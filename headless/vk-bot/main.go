@@ -159,7 +159,7 @@ func (b *bot) poll() error {
 		return err
 	}
 	if data.Failed != 0 {
-		return fmt.Errorf("longpoll failed=%d", data.Failed)
+		return fmt.Errorf("longpoll reset=%d", data.Failed)
 	}
 	if data.Ts != "" {
 		b.ts = data.Ts

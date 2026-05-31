@@ -4,10 +4,10 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
-      - develop
-      - f/*
+#    branches:
+#      - main
+#      - develop
+#      - f/*
   workflow_dispatch:
 
 permissions:
