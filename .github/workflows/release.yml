@@ -1,0 +1,73 @@
+name: Build release assets
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - develop
+      - f/*
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build release image
+        run: docker build --tag whitelist-bypass-release --file docker-build/Dockerfile .
+
+      - name: Build release assets
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace/whitelist-bypass" \
+            --workdir /workspace/whitelist-bypass/relay \
+            whitelist-bypass-release \
+            bash -lc '
+              set -euo pipefail
+              gomobile init -v
+              cd /workspace/whitelist-bypass
+              rm -rf prebuilts
+              mkdir -p prebuilts
+              ./make-release.sh
+            '
+
+      - name: Verify release assets
+        run: |
+          if ! find prebuilts -maxdepth 1 -type f -print -quit | grep -q .; then
+            echo "No release assets were generated in prebuilts/" >&2
+            exit 1
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-${{ github.run_id }}
+          path: prebuilts/*
+          if-no-files-found: error
+
+      - name: Create draft release and upload assets
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if is_draft="$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            if [ "$is_draft" != "true" ]; then
+              echo "Release $TAG_NAME already exists and is published; refusing to modify it." >&2
+              exit 1
+            fi
+          else
+            gh release create "$TAG_NAME" \
+              --draft \
+              --generate-notes \
+              --title "$TAG_NAME"
+          fi
+
+          gh release upload "$TAG_NAME" prebuilts/* --clobber
