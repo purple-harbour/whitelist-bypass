@@ -133,7 +133,7 @@ enum CallPlatform: String {
         if url.hasPrefix(wbstreamPrefix) {
             return .wbstream
         }
-        if url.contains("telemost.yandex") {
+        if url.contains("telemost") {
             return .telemost
         }
         return .vk
@@ -311,7 +311,7 @@ class ProxyManager: ObservableObject {
             }
 
         case .vk:
-            IosStartVKHeadless(socksPort, activeSocksUser, activeSocksPass, callUrl, displayName, tunnelMode.rawValue, vp8Fps, vp8Batch, bridge)
+            IosStartVKHeadless(socksPort, activeSocksUser, activeSocksPass, callUrl, displayName, tunnelMode.rawValue, vp8Fps, vp8Batch, dualTrack, bridge)
             appendLog("Started VK headless joiner")
 
         case .wbstream:
