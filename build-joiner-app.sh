@@ -50,8 +50,8 @@ npx electron-builder --linux --x64 --publish never
 
 if [ "$(uname)" = "Darwin" ]; then
     echo ""
-    echo "--- macOS (universal) ---"
-    npx electron-builder --mac --publish never || true
+    echo "--- macOS ---"
+    npx electron-builder --mac --x64 --arm64 --publish never || true
 fi
 
 "$ROOT/clean-prebuilts.sh"

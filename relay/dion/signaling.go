@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"whitelist-bypass/relay/common"
 )
 
 const (
@@ -281,7 +283,8 @@ func (c *SignalingClient) Close() error {
 	if !c.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	return c.conn.Close()
+	common.CloseWS(c.conn)
+	return nil
 }
 
 func (c *SignalingClient) sendFrame(method string, params any) error {
@@ -549,11 +552,15 @@ func (c *SignalingClient) ReadLoop() error {
 		}
 		var frame Frame
 		if err := json.Unmarshal(raw, &frame); err != nil {
-			c.logFn("dion: drop non-json frame: %v", err)
+			if common.Debug {
+				c.logFn("dion: drop non-json frame: %v", err)
+			}
 			continue
 		}
 		if frame.Error != nil {
-			c.logFn("dion: <- %s ERROR code=%d message=%q", frame.Method, frame.Error.Code, frame.Error.Message)
+			if common.Debug {
+				c.logFn("dion: <- %s ERROR code=%d message=%q", frame.Method, frame.Error.Code, frame.Error.Message)
+			}
 		}
 		c.dispatch(frame)
 	}

@@ -111,8 +111,17 @@ func (o *TunnelObfuscator) dataHeader() []byte {
 	return hdr
 }
 
-func (o *TunnelObfuscator) EncodeKeepalive() []byte {
-	return o.keepaliveHeader()
+func (o *TunnelObfuscator) EncodeKeepalive(padLen int) []byte {
+	hdr := o.keepaliveHeader()
+	if padLen <= 0 {
+		return hdr
+	}
+	out := make([]byte, keepaliveHdrLen+padLen)
+	copy(out, hdr)
+	if _, err := rand.Read(out[keepaliveHdrLen:]); err != nil {
+		return hdr
+	}
+	return out
 }
 
 func (o *TunnelObfuscator) EncodeData(payload []byte) []byte {
@@ -163,10 +172,12 @@ func (o *TunnelObfuscator) Decode(frame []byte) DecodeResult {
 		return DecodeResult{}
 	}
 	var hdrLen, epochOff int
+	isKeepaliveFrame := false
 	switch frame[0] {
 	case vp8Keepalive[0]:
 		hdrLen = keepaliveHdrLen
 		epochOff = vp8KeepaliveLen
+		isKeepaliveFrame = true
 	case vp8Interframe[0]:
 		hdrLen = interframeHdrLen
 		epochOff = vp8InterframeLen
@@ -192,7 +203,7 @@ func (o *TunnelObfuscator) Decode(frame []byte) DecodeResult {
 	}
 	o.mu.Unlock()
 
-	if len(frame) == hdrLen {
+	if isKeepaliveFrame || len(frame) == hdrLen {
 		res.Keepalive = true
 		return res
 	}

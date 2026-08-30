@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import * as QRCode from 'qrcode';
 import { TabManager } from './tab-manager';
 import { BotManager } from '../bot/bot-manager';
 import { IPC } from '../constants';
@@ -15,6 +16,19 @@ export function registerIpcHandlers(tabManager: TabManager): void {
   ipcMain.handle(IPC.GET_CALL_CREATOR_CODE, async (_e, scriptFile: string) => {
     const filePath = path.join(__dirname, '..', '..', 'scripts', scriptFile || 'vk-call-creator.js');
     return fs.readFile(filePath, 'utf8');
+  });
+
+  ipcMain.handle(IPC.RENDER_QR, async (_e, text: string) => {
+    if (!text) return '';
+    try {
+      return await QRCode.toDataURL(text, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        scale: 6,
+      });
+    } catch {
+      return '';
+    }
   });
 
   ipcMain.handle(IPC.SET_TUNNEL_MODE, (_e, tabId: string, mode: string, platform?: string) => {
@@ -90,8 +104,20 @@ export function registerIpcHandlers(tabManager: TabManager): void {
     tabManager.setUpstreamProxy(proxy);
   });
 
+  ipcMain.handle(IPC.SET_DEBUG_LOGGING, (_e, enabled: boolean) => {
+    tabManager.setDebugLogging(enabled);
+  });
+
   ipcMain.handle(IPC.CLEAR_COOKIES, (_e, platform: string) => {
     return tabManager.clearPlatformCookies(platform as Platform);
+  });
+
+  ipcMain.handle(IPC.GET_DION_CREDENTIALS, () => {
+    return tabManager.getDionCredentials();
+  });
+
+  ipcMain.handle(IPC.SET_DION_CREDENTIALS, (_e, email: string, password: string) => {
+    return tabManager.setDionCredentials(email, password);
   });
 
   ipcMain.handle(IPC.SEND_BOT_CALL_LINK, (_e, tabId: string, link: string) => {

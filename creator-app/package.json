@@ -1,6 +1,6 @@
 {
   "name": "whitelist-bypass-creator",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc",
@@ -8,11 +8,13 @@
     "start:dev": "electron ."
   },
   "dependencies": {
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/node-fetch": "^2.6.13",
+    "@types/qrcode": "^1.5.6",
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",
     "typescript": "^5.6.0"
@@ -46,6 +48,7 @@
     ],
     "mac": {
       "target": "dmg",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "icon": "resources/icon.icns",
       "extraResources": [
         {

@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	vkAPIBase    = "https://api.vk.com/method"
+	vkAPIBase    = "https://api.vk.ru/method"
 	vkAPIVersion = "5.199"
 	pollWait     = 25
 	retryDelay   = 3 * time.Second
@@ -272,7 +272,7 @@ func detectJoinLink(text string) (platform, target string, ok bool) {
 		return "tm", trimmed, true
 	case strings.HasPrefix(lower, "dion://"), strings.Contains(lower, "dion.vc"):
 		return "dion", trimmed, true
-	case strings.Contains(lower, "vk.com/call/join"):
+	case strings.Contains(lower, "vk.ru/call/join"):
 		return "vk", trimmed, true
 	}
 	return "", "", false
@@ -496,6 +496,13 @@ func main() {
 	upstreamUser := flag.String("upstream-user", "", "upstream SOCKS5 username forwarded to spawned creators")
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password forwarded to spawned creators")
 	flag.Parse()
+
+	if *token == "" {
+		*token = os.Getenv("VK_TOKEN")
+	}
+	if *upstreamPass == "" {
+		*upstreamPass = os.Getenv("UPSTREAM_PASS")
+	}
 
 	switch *resources {
 	case "default", "moderate", "unlimited":

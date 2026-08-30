@@ -13,6 +13,7 @@ import (
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 
+	"whitelist-bypass/relay/common"
 	"whitelist-bypass/relay/tunnel"
 )
 
@@ -241,6 +242,7 @@ func (c *Call) Start() error {
 	if err := sender.ReplaceTrack(track); err != nil {
 		return fmt.Errorf("ReplaceTrack: %w", err)
 	}
+	go tunnel.DrainSenderRTCP(sender)
 	c.cfg.LogFn("[call] role=%s attached send track to mid=%d", c.cfg.Role, sendMidIndex)
 
 	peer.PC.OnTrack(func(remoteTrack *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
@@ -500,7 +502,9 @@ func (c *Call) handleSpeakerCamStateChanged(params SpeakerCamStateChangedParams)
 		c.peersByID[params.SessionID] = &PeerEntry{SessionID: params.SessionID, CamState: params.CamState, JoinedAt: time.Now()}
 	}
 	c.peersMu.Unlock()
-	c.cfg.LogFn("[call] speaker_cam_state_changed session_id=%s cam=%v", params.SessionID, params.CamState)
+	if common.Debug {
+		c.cfg.LogFn("[call] speaker_cam_state_changed session_id=%s cam=%v", params.SessionID, params.CamState)
+	}
 	if params.CamState {
 		c.subscribeIfNeeded(params.SessionID)
 	}

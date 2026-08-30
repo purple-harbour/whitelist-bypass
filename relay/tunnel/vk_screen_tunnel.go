@@ -5,13 +5,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"whitelist-bypass/relay/common"
 )
 
 const (
-	screenWriterFPS      = 24
-	screenWriterBatch    = 30
-	screenWriterMaxBytes = 60000
-	screenWriterQueue    = 256
+	screenWriterFPS       = 24
+	screenWriterBatch     = 30
+	screenWriterMaxBytes  = 60000
+	screenWriterQueue     = 256
+	screenKeepalivePadMax = 48
 )
 
 type ScreenWriter struct {
@@ -87,7 +90,7 @@ func (w *ScreenWriter) Reconfigure(fps, batch int) {
 	}
 }
 
-func (w *ScreenWriter) interval() (time.Duration, int) {
+func (w *ScreenWriter) interval() time.Duration {
 	w.cfgMu.Lock()
 	fps, batch := w.fps, w.batch
 	w.cfgMu.Unlock()
@@ -99,11 +102,15 @@ func (w *ScreenWriter) interval() (time.Duration, int) {
 	if sample <= 0 {
 		sample = time.Millisecond
 	}
-	keepaliveEvery := int((100 * time.Millisecond) / sample)
-	if keepaliveEvery < 1 {
-		keepaliveEvery = 1
+	return sample
+}
+
+func (w *ScreenWriter) nextKeepalive(sample time.Duration) (ticks, padLen int) {
+	ticks = int(common.DurationInRange(keepaliveIdleMin, keepaliveIdleMax) / sample)
+	if ticks < 1 {
+		ticks = 1
 	}
-	return sample, keepaliveEvery
+	return ticks, common.IntInRange(0, screenKeepalivePadMax)
 }
 
 func (w *ScreenWriter) Start() {
@@ -134,14 +141,15 @@ func (w *ScreenWriter) emit(msg []byte) {
 		return
 	}
 	n := w.sent.Add(1)
-	if n <= 5 || n%500 == 0 {
+	if common.Debug && (n <= 5 || n%500 == 0) {
 		w.logFn("[%s] sent frame #%d size=%d", w.label, n, len(msg))
 	}
 }
 
 func (w *ScreenWriter) writerLoop() {
 	for {
-		sample, keepaliveEvery := w.interval()
+		sample := w.interval()
+		keepaliveEvery, keepalivePad := w.nextKeepalive(sample)
 		ticker := time.NewTicker(sample)
 		idle := 0
 		reconfigure := false
@@ -163,7 +171,8 @@ func (w *ScreenWriter) writerLoop() {
 						continue
 					}
 					idle = 0
-					w.emit(w.obf.EncodeKeepalive())
+					w.emit(w.obf.EncodeKeepalive(keepalivePad))
+					keepaliveEvery, keepalivePad = w.nextKeepalive(sample)
 				}
 			}
 		}
@@ -252,7 +261,7 @@ func (s *SymmetricScreenTunnel) Stop() {
 func (s *SymmetricScreenTunnel) HandleScreenFrame(frame []byte) {
 	res := s.obf.Decode(frame)
 	n := s.recv.Add(1)
-	if n <= 10 || n%500 == 0 {
+	if common.Debug && (n <= 10 || n%500 == 0) {
 		s.logFn("screen recv frame #%d in=%d hasFrame=%v keepalive=%v payload=%d", n, len(frame), res.HasFrame, res.Keepalive, len(res.Payload))
 	}
 	if !res.HasFrame || res.SelfEcho || res.Keepalive || len(res.Payload) == 0 {

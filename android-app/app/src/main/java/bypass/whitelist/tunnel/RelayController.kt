@@ -76,6 +76,7 @@ class RelayController(
                 return@Thread
             }
             try {
+                Androidbind.setDebug(Prefs.debug)
                 Androidbind.startJoiner(Ports.DC_WS, Prefs.socksPort, Prefs.socksHost, SocksAuth.user, SocksAuth.pass, cb)
             } catch (e: Exception) {
                 if (isRunning) onLog("Relay error: ${e.message}")
@@ -99,7 +100,7 @@ class RelayController(
                 return@Thread
             }
             try {
-                val pb = ProcessBuilder(
+                val cmd = mutableListOf(
                     relayBin.absolutePath,
                     "--mode", relayMode,
                     "--ws-port", "${Ports.PION_SIGNALING}",
@@ -108,6 +109,8 @@ class RelayController(
                     "--socks-user", SocksAuth.user,
                     "--socks-pass", SocksAuth.pass
                 )
+                if (Prefs.debug) cmd.add("--debug")
+                val pb = ProcessBuilder(cmd)
                 pb.redirectErrorStream(true)
                 val proc = pb.start()
                 synchronized(this) { pionProcess = proc }

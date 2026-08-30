@@ -91,7 +91,7 @@ export function createWindow(tabManager: TabManager): BrowserWindow {
       if (url.includes('telemost.yandex')) {
         ac.vk.stop();
         ac.telemost.attach(wvContents);
-      } else if (url.includes('vk.com')) {
+      } else if (url.includes('vk.ru')) {
         ac.telemost.stop();
         ac.vk.attach(wvContents);
       } else {

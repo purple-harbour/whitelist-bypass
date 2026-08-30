@@ -26,7 +26,6 @@ const (
 
 const readBufSize = 65536
 
-
 var framePool = sync.Pool{
 	New: func() any {
 		buf := make([]byte, 5+readBufSize)
@@ -72,7 +71,6 @@ func logMsg(format string, args ...any) {
 	}
 }
 
-
 type wsWriter struct {
 	ws   *websocket.Conn
 	ch   chan []byte
@@ -113,7 +111,6 @@ func (w *wsWriter) close() {
 	<-w.done
 }
 
-
 var activeJoiner struct {
 	sync.Mutex
 	j         *joinerRelay
@@ -125,6 +122,8 @@ var activeJoiner struct {
 
 func ActiveWsPort() int    { return activeJoiner.wsPort }
 func ActiveSocksPort() int { return activeJoiner.socksPort }
+
+func SetDebug(enabled bool) { common.Debug = enabled }
 
 func StopJoiner() {
 	activeJoiner.Lock()
@@ -289,13 +288,7 @@ func (j *joinerRelay) handleUDPAssociate(tcpConn net.Conn) {
 					binary.BigEndian.Uint16(buf[5+dlen:7+dlen]))
 				headerLen = 5 + dlen + 2
 			case common.AtypIPv6:
-				if n < 22 {
-					continue
-				}
-				ip := net.IP(buf[4:20])
-				dstAddr = fmt.Sprintf("[%s]:%d", ip.String(),
-					binary.BigEndian.Uint16(buf[20:22]))
-				headerLen = 22
+				continue
 			default:
 				continue
 			}
@@ -430,13 +423,9 @@ func (j *joinerRelay) handleSOCKS(conn net.Conn) {
 		host = fmt.Sprintf("%s:%d", string(buf[5:5+dlen]),
 			binary.BigEndian.Uint16(buf[5+dlen:7+dlen]))
 	case common.AtypIPv6:
-		if n < 22 {
-			conn.Close()
-			return
-		}
-		ip := net.IP(buf[4:20])
-		host = fmt.Sprintf("[%s]:%d", ip.String(),
-			binary.BigEndian.Uint16(buf[20:22]))
+		conn.Write(common.NetUnreach)
+		conn.Close()
+		return
 	default:
 		conn.Write(common.AddrErr)
 		conn.Close()
@@ -471,4 +460,3 @@ func (j *joinerRelay) handleSOCKS(conn net.Conn) {
 		}
 	}()
 }
-

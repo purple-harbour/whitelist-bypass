@@ -29,6 +29,8 @@ func NewTelemostHeadlessJoiner(logFn func(string, ...any)) *TelemostHeadlessJoin
 	return wrapper
 }
 
+func (j *TelemostHeadlessJoiner) MarkConfigAcked() { j.inner.MarkConfigAcked() }
+
 func (j *TelemostHeadlessJoiner) Run() {
 	j.inner.Status.EmitStatus(common.StatusReady)
 	for {

@@ -32,7 +32,9 @@ func main() {
 	upstreamUser := flag.String("upstream-user", "", "upstream SOCKS5 username")
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
 	flag.String("local-ip", "", "local IP address (unused, passed via hook)")
+	debugFlag := flag.Bool("debug", false, "verbose debug logging")
 	flag.Parse()
+	common.Debug = *debugFlag
 
 	if *mode == "" {
 		fmt.Fprintf(os.Stderr, "Usage: relay --mode dc-joiner|dc-creator|vk-video-joiner|vk-video-creator|telemost-video-joiner|telemost-video-creator\n")
@@ -75,7 +77,8 @@ func main() {
 		)
 		return func(tun tunnel.DataTunnel) {
 			readBuf := common.VP8BufSize
-			if _, ok := tun.(*tunnel.DCTunnel); ok {
+			switch tun.(type) {
+			case *tunnel.DCTunnel, *tunnel.MultiTrackKCPTunnel:
 				readBuf = common.DCBufSize
 			}
 			bridgeMu.Lock()
@@ -114,7 +117,7 @@ func main() {
 		startVideo(*mode, c, joinerCallback)
 	case "vk-headless-joiner":
 		c := android.NewVKHeadlessJoiner(log.Printf)
-		c.OnConnected = newPersistentJoinerBridge(nil)
+		c.OnConnected = newPersistentJoinerBridge(c.MarkConfigAcked)
 		c.Run()
 	case "vk-video-creator":
 		c := pion.NewVKClient(log.Printf)
@@ -122,7 +125,7 @@ func main() {
 		startVideo(*mode, c, creatorCallback)
 	case "telemost-headless-joiner":
 		c := android.NewTelemostHeadlessJoiner(log.Printf)
-		c.OnConnected = newPersistentJoinerBridge(nil)
+		c.OnConnected = newPersistentJoinerBridge(c.MarkConfigAcked)
 		c.Run()
 	case "telemost-video-joiner":
 		c := pion.NewTelemostClient(log.Printf)

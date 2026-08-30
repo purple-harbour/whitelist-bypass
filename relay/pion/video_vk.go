@@ -46,7 +46,9 @@ func (c *VKClient) handleMessage(raw []byte) {
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return
 	}
-	c.logFn("vk: >> msg type=%s id=%d", msg.Type, msg.ID)
+	if common.Debug {
+		c.logFn("vk: >> msg type=%s id=%d", msg.Type, msg.ID)
+	}
 
 	switch msg.Type {
 	case "ice-servers":
@@ -66,7 +68,9 @@ func (c *VKClient) handleMessage(raw []byte) {
 	case "close":
 		c.cleanup()
 	}
-	c.logFn("vk: << msg type=%s id=%d done", msg.Type, msg.ID)
+	if common.Debug {
+		c.logFn("vk: << msg type=%s id=%d done", msg.Type, msg.ID)
+	}
 }
 
 func (c *VKClient) createPC(config webrtc.Configuration) error {
@@ -96,7 +100,9 @@ func (c *VKClient) createPC(config webrtc.Configuration) error {
 			c.logFn("vk: producerNotification DC opened")
 		})
 		dcNotif.OnMessage(func(msg webrtc.DataChannelMessage) {
-			c.logFn("vk: producerNotification msg len=%d isString=%v", len(msg.Data), msg.IsString)
+			if common.Debug {
+				c.logFn("vk: producerNotification msg len=%d isString=%v", len(msg.Data), msg.IsString)
+			}
 			// Forward to Node bridge as sfu-dc-message
 			c.SendToHook("sfu-dc-message", map[string]interface{}{
 				"channel": "producerNotification",
@@ -113,7 +119,9 @@ func (c *VKClient) createPC(config webrtc.Configuration) error {
 			c.logFn("vk: producerCommand DC opened")
 		})
 		dcCmd.OnMessage(func(msg webrtc.DataChannelMessage) {
-			c.logFn("vk: producerCommand msg len=%d", len(msg.Data))
+			if common.Debug {
+				c.logFn("vk: producerCommand msg len=%d", len(msg.Data))
+			}
 			c.SendToHook("sfu-dc-message", map[string]interface{}{
 				"channel": "producerCommand",
 				"data":    string(msg.Data),

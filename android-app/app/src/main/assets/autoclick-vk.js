@@ -44,7 +44,7 @@
   function scanForCaptcha() {
     var iframes = document.querySelectorAll("iframe");
     for (var i = 0; i < iframes.length; i++) {
-      if (iframes[i].src.startsWith("https://id.vk.com/not_robot_captcha")) {
+      if (iframes[i].src.startsWith("https://id.vk.ru/not_robot_captcha")) {
         if(!wasCaptchaDetected) {
           log('Captcha detected, user action required');
           AndroidBridge.onCaptchaDetected(false);

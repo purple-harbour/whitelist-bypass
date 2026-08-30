@@ -122,7 +122,7 @@ npm run build 2>&1
 # macOS (universal binary already)
 echo ""
 echo "--- macOS ---"
-npx electron-builder --mac || true
+npx electron-builder --mac --x64 --arm64 || true
 
 # Windows x64
 echo ""

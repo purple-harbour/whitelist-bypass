@@ -5,7 +5,7 @@
   var CALL_MENU_TRIGGER_ID = 'call-menu-trigger';
   var CALL_MENU_ID = 'call-menu';
   var CALL_IN_PROGRESS_KEY = 'call_in_progress';
-  var VK_CALL_BASE = 'https://vk.com/call/join/';
+  var VK_CALL_BASE = 'https://vk.ru/call/join/';
 
   var start = function() {
     console.log("[BOT] VKCalls: DOM ready...");
@@ -67,7 +67,7 @@
             var inputs = document.querySelectorAll('input[readonly], input[type="text"]');
             for (var i = 0; i < inputs.length; i++) {
               var val = inputs[i].value || '';
-              if (val.indexOf('vk.com/call/join/') !== -1) {
+              if (val.indexOf('vk.ru/call/join/') !== -1) {
                 captureLink(val);
                 clearInterval(pollLink);
                 return;

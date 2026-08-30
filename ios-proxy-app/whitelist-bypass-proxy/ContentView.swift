@@ -236,6 +236,7 @@ struct SettingsView: View {
                 Section(NSLocalizedString("settings_display", comment: "")) {
                     TextField(NSLocalizedString("hint_display_name", comment: ""), text: $proxyManager.displayName)
                     Toggle(NSLocalizedString("settings_show_logs", comment: ""), isOn: $proxyManager.showLogs)
+                    Toggle(NSLocalizedString("settings_debug", comment: ""), isOn: $proxyManager.debug)
                 }
 
                 Section(NSLocalizedString("settings_vp8_pacing", comment: "")) {
@@ -259,6 +260,14 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(NSLocalizedString("vp8_dual_track_title", comment: ""))
                             Text(NSLocalizedString("vp8_dual_track_sub", comment: ""))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    Toggle(isOn: $proxyManager.reliable) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(NSLocalizedString("vp8_reliable_title", comment: ""))
+                            Text(NSLocalizedString("vp8_reliable_sub", comment: ""))
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }

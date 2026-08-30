@@ -68,6 +68,8 @@ export function renderContent(tm: RendererTabManager): void {
       targetInput.value = activeTab.headlessStartTarget || '';
       targetInput.classList.remove('invalid');
       errorEl.textContent = '';
+      const dionAccountCard = document.getElementById('headlessDionAccountCard')!;
+      dionAccountCard.style.display = activeTab.platform === Platform.Dion ? '' : 'none';
       if (activeTab.platform === Platform.WBStream) {
         targetLabel.textContent = 'Paste a room id or stream.wb.ru/room/<id> link.';
         targetInput.placeholder = 'https://stream.wb.ru/room/<id>';
@@ -79,7 +81,7 @@ export function renderContent(tm: RendererTabManager): void {
         targetInput.placeholder = 'https://telemost.yandex.ru/j/...';
       } else {
         targetLabel.textContent = 'Paste a VK call link.';
-        targetInput.placeholder = 'https://vk.com/call/join/...';
+        targetInput.placeholder = 'https://vk.ru/call/join/...';
       }
     } else {
       startEl.classList.remove('visible');
@@ -112,11 +114,15 @@ export function renderContent(tm: RendererTabManager): void {
         document.getElementById('headlessTurn')!.textContent = callInfo.turn || '';
         document.getElementById('headlessProtocol')!.textContent = callInfo.protocol || '';
       }
+      renderJoinQr(callInfo.joinLink || '');
+    } else {
+      renderJoinQr('');
     }
   } else {
     toolbar.style.display = 'flex';
     headlessInfo.style.display = 'none';
-    const isVK = activeTab.platform === Platform.VK && activeTab.url.includes('vk.com');
+    renderJoinQr('');
+    const isVK = activeTab.platform === Platform.VK && activeTab.url.includes('vk.ru');
     const modeSelect = document.getElementById('modeSelect') as HTMLSelectElement;
     const tunnelLabel = document.getElementById('tunnelLabel') as HTMLElement;
     modeSelect.style.display = isVK ? '' : 'none';
@@ -172,7 +178,7 @@ export function loadURL(tm: RendererTabManager, url: string): void {
   if (url.includes('telemost.yandex')) {
     activeTab.platform = Platform.Telemost;
     activeTab.mode = TunnelMode.PionVideo;
-  } else if (url.includes('vk.com')) {
+  } else if (url.includes('vk.ru')) {
     activeTab.platform = Platform.VK;
   }
   window.bridge.setTunnelMode(tm.activeTabId, activeTab.mode, activeTab.platform);
@@ -291,6 +297,34 @@ export function exportCookiesZip(): void {
     anchor.download = 'cookies.zip';
     anchor.click();
     URL.revokeObjectURL(anchor.href);
+  });
+}
+
+let renderedQrText = '';
+
+function renderJoinQr(link: string): void {
+  const wrap = document.getElementById('headlessQrWrap') as HTMLElement | null;
+  const image = document.getElementById('headlessQr') as HTMLImageElement | null;
+  if (!wrap || !image) return;
+  if (!link) {
+    renderedQrText = '';
+    wrap.style.display = 'none';
+    image.removeAttribute('src');
+    return;
+  }
+  if (link === renderedQrText) {
+    wrap.style.display = 'block';
+    return;
+  }
+  renderedQrText = link;
+  (window as any).bridge.renderQr(link).then((dataUrl: string) => {
+    if (renderedQrText !== link) return;
+    if (!dataUrl) {
+      wrap.style.display = 'none';
+      return;
+    }
+    image.src = dataUrl;
+    wrap.style.display = 'block';
   });
 }
 

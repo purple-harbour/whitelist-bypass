@@ -20,6 +20,7 @@ export class RendererTabManager {
   botRunning = false;
   botSettings: BotSettings;
   upstreamProxy: UpstreamProxy;
+  debugLogging: boolean;
   private onRender: () => void;
 
   constructor(onRender: () => void) {
@@ -32,6 +33,7 @@ export class RendererTabManager {
     this.upstreamProxy = savedProxy
       ? JSON.parse(savedProxy)
       : { socks: '', user: '', pass: '' };
+    this.debugLogging = localStorage.getItem('debugLogging') === 'true';
   }
 
   createTab(): string {
@@ -165,7 +167,7 @@ export class RendererTabManager {
   getTabLabel(tab: RendererTab): string {
     if (tab.name) return tab.name;
     if (tab.url) {
-      if (tab.url.includes('vk.com')) return 'VK (legacy)';
+      if (tab.url.includes('vk.ru')) return 'VK (legacy)';
       if (tab.url.includes('telemost')) return 'Telemost (legacy)';
       if (tab.url.includes('dion.vc')) return 'DION';
     }
@@ -245,6 +247,11 @@ export class RendererTabManager {
   saveUpstreamProxy(): void {
     localStorage.setItem('upstreamProxy', JSON.stringify(this.upstreamProxy));
     window.bridge.setUpstreamProxy(this.upstreamProxy);
+  }
+
+  saveDebugLogging(): void {
+    localStorage.setItem('debugLogging', String(this.debugLogging));
+    window.bridge.setDebugLogging(this.debugLogging);
   }
 
   toggleBot(): void {

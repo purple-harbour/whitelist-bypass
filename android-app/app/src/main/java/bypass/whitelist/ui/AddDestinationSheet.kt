@@ -33,6 +33,12 @@ class AddDestinationSheet : BottomSheetDialogFragment() {
         val buttonCancel = view.findViewById<Button>(R.id.buttonCancel)
         val buttonSave = view.findViewById<Button>(R.id.buttonSave)
 
+        val prefillLink = arguments?.getString(ARG_PREFILL_LINK).orEmpty()
+        if (prefillLink.isNotEmpty()) {
+            inputLink.setText(prefillLink)
+            inputName.setText(CallConfig.suggestNameFor(prefillLink))
+        }
+
         pasteChip.setOnClickListener {
             val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = clipboard.primaryClip
@@ -80,8 +86,14 @@ class AddDestinationSheet : BottomSheetDialogFragment() {
     companion object {
         const val TAG = "AddDestinationSheet"
 
-        fun show(manager: FragmentManager) {
-            AddDestinationSheet().show(manager, TAG)
+        private const val ARG_PREFILL_LINK = "prefill_link"
+
+        fun show(manager: FragmentManager, prefillLink: String = "") {
+            val sheet = AddDestinationSheet()
+            if (prefillLink.isNotEmpty()) {
+                sheet.arguments = Bundle().apply { putString(ARG_PREFILL_LINK, prefillLink) }
+            }
+            sheet.show(manager, TAG)
         }
     }
 }

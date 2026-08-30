@@ -16,11 +16,6 @@ import (
 	"whitelist-bypass/relay/tunnel"
 )
 
-const (
-	dionReconnectInitialDelay = time.Second
-	dionReconnectMaxDelay     = 16 * time.Second
-)
-
 type DionHeadlessJoiner struct {
 	logFn       func(string, ...any)
 	OnConnected func(tunnel.DataTunnel)
@@ -165,19 +160,7 @@ func (j *DionHeadlessJoiner) runOnce(httpClient *http.Client, slug, displayName 
 }
 
 func (j *DionHeadlessJoiner) waitBeforeRetry(attempt int) bool {
-	delay := dionReconnectInitialDelay << attempt
-	if delay > dionReconnectMaxDelay || delay <= 0 {
-		delay = dionReconnectMaxDelay
-	}
-	j.logFn("dion-joiner: waiting %s before reconnect", delay)
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return !j.isClosed()
-	case <-j.stopCh:
-		return false
-	}
+	return waitReconnectBackoff(attempt, j.logFn, "dion-joiner", j.stopCh, j.isClosed)
 }
 
 func (j *DionHeadlessJoiner) isClosed() bool {

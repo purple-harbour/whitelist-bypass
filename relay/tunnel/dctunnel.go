@@ -11,11 +11,12 @@ import (
 
 	"github.com/pion/datachannel"
 	"github.com/pion/webrtc/v4"
+
+	"whitelist-bypass/relay/common"
 )
 
 // Telemost chunk size
 const chunkSize = 994
-const dcStatsEnabled = false
 
 type chunkBuf struct {
 	chunks [][]byte
@@ -160,7 +161,9 @@ func (t *DCTunnel) deliverMessage(data []byte) {
 	if t.obf != nil {
 		pt, ok := t.obf.DecryptPayload(data)
 		if !ok {
-			t.logFn("dctunnel: decrypt failed, dropping %d bytes", len(data))
+			if common.Debug {
+				t.logFn("dctunnel: decrypt failed, dropping %d bytes", len(data))
+			}
 			return
 		}
 		data = pt
@@ -247,13 +250,13 @@ func (t *DCTunnel) SendData(data []byte) {
 	})
 }
 
-func (t *DCTunnel) SetOnData(fn func([]byte))   { t.onData = fn }
-func (t *DCTunnel) OnData() func([]byte)        { return t.onData }
-func (t *DCTunnel) SetOnClose(fn func())         { t.onClose = fn }
-func (t *DCTunnel) Reconfigure(fps, batch int)   {}
+func (t *DCTunnel) SetOnData(fn func([]byte))  { t.onData = fn }
+func (t *DCTunnel) OnData() func([]byte)       { return t.onData }
+func (t *DCTunnel) SetOnClose(fn func())       { t.onClose = fn }
+func (t *DCTunnel) Reconfigure(fps, batch int) {}
 
 func (t *DCTunnel) statsLoop() {
-	if !dcStatsEnabled {
+	if !common.Debug {
 		return
 	}
 	var lastRecv, lastSend uint64

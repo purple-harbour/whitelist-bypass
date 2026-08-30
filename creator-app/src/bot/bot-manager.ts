@@ -219,7 +219,7 @@ export class BotManager {
     if (lower.startsWith('dion://') || lower.includes('dion.vc')) {
       return { platform: Platform.Dion, target: trimmed };
     }
-    if (lower.includes('vk.com/call/join')) {
+    if (lower.includes('vk.ru/call/join')) {
       return { platform: Platform.VK, target: trimmed };
     }
     return null;

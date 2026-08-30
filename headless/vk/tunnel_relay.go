@@ -42,12 +42,17 @@ type TunnelRelay struct {
 
 	readBufSize int
 	maxDCBuf    uint64
+	upstream    *common.Socks5Upstream
 
 	mode     string
 	modeOnce sync.Once
 }
 
 func (u *TunnelRelay) SetObfuscator(o *tunnel.TunnelObfuscator) { u.obf = o }
+
+func (u *TunnelRelay) SetUpstreamSocks(addr, user, pass string) {
+	u.upstream = common.NewSocks5Upstream(addr, user, pass)
+}
 
 func NewTunnelRelay() *TunnelRelay {
 	return &TunnelRelay{mode: "unknown"}
@@ -99,21 +104,26 @@ func (u *TunnelRelay) Init(iceServers []webrtc.ICEServer) error {
 		"audio", "tunnel-audio",
 	)
 	pc.AddTrack(audioTrack)
-	pc.AddTrack(sampleTrack)
+	videoSender, _ := pc.AddTrack(sampleTrack)
+	go tunnel.DrainSenderRTCP(videoSender)
 
 	ordered := true
 	dcNotif, err := pc.CreateDataChannel("producerNotification", &webrtc.DataChannelInit{Ordered: &ordered})
 	if err == nil {
 		dcNotif.OnOpen(func() { log.Println("[relay] producerNotification DC opened") })
 		dcNotif.OnMessage(func(msg webrtc.DataChannelMessage) {
-			log.Printf("[relay] producerNotification msg len=%d", len(msg.Data))
+			if common.Debug {
+				log.Printf("[relay] producerNotification msg len=%d", len(msg.Data))
+			}
 		})
 	}
 	dcCmd, err := pc.CreateDataChannel("producerCommand", &webrtc.DataChannelInit{Ordered: &ordered})
 	if err == nil {
 		dcCmd.OnOpen(func() { log.Println("[relay] producerCommand DC opened") })
 		dcCmd.OnMessage(func(msg webrtc.DataChannelMessage) {
-			log.Printf("[relay] producerCommand msg len=%d", len(msg.Data))
+			if common.Debug {
+				log.Printf("[relay] producerCommand msg len=%d", len(msg.Data))
+			}
 		})
 	}
 	producerScreen, psErr := pc.CreateDataChannel("producerScreenShare", &webrtc.DataChannelInit{Ordered: &ordered})
@@ -254,7 +264,9 @@ func (u *TunnelRelay) handleDCMessage(data []byte) {
 	if u.obf != nil {
 		pt, ok := u.obf.DecryptPayload(data)
 		if !ok {
-			log.Printf("[dc] decrypt failed, dropping %d bytes", len(data))
+			if common.Debug {
+				log.Printf("[dc] decrypt failed, dropping %d bytes", len(data))
+			}
 			return
 		}
 		data = pt
@@ -280,7 +292,9 @@ func (u *TunnelRelay) handleDCMessage(data []byte) {
 			select {
 			case dc.ch <- cp:
 			default:
-				log.Printf("[dc] conn %d write queue full, dropping %d bytes", connID, len(payload))
+				if common.Debug {
+					log.Printf("[dc] conn %d write queue full, dropping %d bytes", connID, len(payload))
+				}
 			}
 		}
 	case tunnel.MsgClose:
@@ -314,7 +328,13 @@ func (u *TunnelRelay) sendDCFrame(connID uint32, mt byte, payload []byte) {
 
 func (u *TunnelRelay) connectTCP(connID uint32, addr string) {
 	log.Printf("[dc] CONNECT %d -> %s", connID, common.MaskAddr(addr))
-	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	var conn net.Conn
+	var err error
+	if u.upstream != nil {
+		conn, err = u.upstream.DialTCP(addr, 10*time.Second)
+	} else {
+		conn, err = net.DialTimeout("tcp", addr, 10*time.Second)
+	}
 	if err != nil {
 		log.Printf("[dc] CONNECT %d failed: %s", connID, common.MaskError(err))
 		u.sendDCFrame(connID, tunnel.MsgConnectErr, []byte(common.MaskError(err)))
@@ -376,6 +396,26 @@ func (u *TunnelRelay) handleUDP(connID uint32, payload []byte) {
 	}
 	addr := string(payload[1 : 1+addrLen])
 	data := payload[1+addrLen:]
+	resp := make([]byte, common.UDPBufSize)
+
+	if u.upstream != nil {
+		session, err := u.upstream.UDPAssociate(10 * time.Second)
+		if err != nil {
+			return
+		}
+		defer session.Close()
+		if err := session.WriteTo(data, addr); err != nil {
+			return
+		}
+		session.SetReadDeadline(time.Now().Add(5 * time.Second))
+		n, err := session.Read(resp)
+		if err != nil {
+			return
+		}
+		u.sendDCFrame(connID, tunnel.MsgUDPReply, resp[:n])
+		return
+	}
+
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return
@@ -387,7 +427,6 @@ func (u *TunnelRelay) handleUDP(connID uint32, payload []byte) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 	conn.Write(data)
-	resp := make([]byte, common.UDPBufSize)
 	n, err := conn.Read(resp)
 	if err != nil {
 		return
@@ -455,7 +494,7 @@ func (u *TunnelRelay) readTrack(track *webrtc.TrackRemote) {
 			continue
 		}
 		recvCount++
-		if recvCount <= 3 || recvCount%200 == 0 {
+		if common.Debug && (recvCount <= 3 || recvCount%200 == 0) {
 			log.Printf("[video] recv vp8 frame #%d %d bytes", recvCount, len(frameBuf))
 		}
 

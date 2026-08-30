@@ -21,6 +21,7 @@ class MainFragmentView(private val root: View) {
 
     private val headerSub: TextView = root.findViewById(R.id.headerSub)
     private val addButton: View = root.findViewById(R.id.headerAddButton)
+    private val scanButton: View = root.findViewById(R.id.headerScanButton)
     private val hero: View = root.findViewById(R.id.heroButton)
     private val heroLabel: TextView = root.findViewById(R.id.heroLabel)
     private val heroPowerIcon: ImageView = root.findViewById(R.id.heroPowerIcon)
@@ -43,6 +44,7 @@ class MainFragmentView(private val root: View) {
     private val statMode: TextView = root.findViewById(R.id.statMode)
 
     var onAddCallClicked: Callback? = null
+    var onScanQrClicked: Callback? = null
     var onHeroPressed: Callback? = null
     var onPingPressed: Callback? = null
     var onCallSelected: ParamCallback<CallConfig>? = null
@@ -58,6 +60,7 @@ class MainFragmentView(private val root: View) {
         emptyCta.clipToOutline = true
         pingButton.clipToOutline = true
         addButton.setOnClickListener { onAddCallClicked?.invoke() }
+        scanButton.setOnClickListener { onScanQrClicked?.invoke() }
         emptyCta.setOnClickListener { onAddCallClicked?.invoke() }
         hero.setOnTouchListener { v, event ->
             when (event.action) {

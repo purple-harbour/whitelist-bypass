@@ -18,6 +18,16 @@ import (
 
 var ErrSessionExpired = errors.New("dion: session expired, re-login required")
 
+var errLoginEndpointMissing = errors.New("dion: login endpoint not available")
+
+const (
+	accessCookieName  = "vc-access-token"
+	refreshCookieName = "vc-refresh-token"
+
+	loginClientsPath  = "/v2/users/login/web"
+	loginPlatformPath = "/platform/v2/auth/auth-providers/dion/login/password"
+)
+
 const (
 	refreshSkewSeconds   = 60
 	refreshMaxAttempts   = 3
@@ -30,6 +40,7 @@ const (
 	APIClientsBase = "https://api-clients.dion.vc"
 	WebBase        = "https://dion.vc"
 	Origin         = "https://dion.vc"
+	CookieDomain   = "dion.vc"
 )
 
 // ParseRoom accepts a bare room id, a dion://<id> link, or a
@@ -72,6 +83,14 @@ type GuestAuthResponse struct {
 	User         GuestUser `json:"user"`
 }
 
+type LoginResponse struct {
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	AuthProvider string    `json:"auth_provider"`
+	IsAuthBySSO  bool      `json:"is_auth_by_sso"`
+	User         GuestUser `json:"user"`
+}
+
 type EventInfo struct {
 	ID     string   `json:"id"`
 	Name   string   `json:"name"`
@@ -101,6 +120,8 @@ type Session struct {
 	UserID         string
 	SessionID      string
 	cookiesPath    string
+	email          string
+	password       string
 	refreshMu      sync.Mutex
 }
 
@@ -220,12 +241,80 @@ func (s *Session) RegisterAnonymousGuest(eventID, displayName string) (*GuestAut
 	return &auth, nil
 }
 
+// LoginWithPassword exchanges credentials for a fresh token pair. The web
+// front-end posts to api-clients, and switches to the platform endpoint when
+// the DION_PLATFORM_COOKIE_AUTH_ENABLED toggle is on, so both are tried.
+func (s *Session) LoginWithPassword(email, password string) error {
+	if email == "" || password == "" {
+		return fmt.Errorf("login: email and password are required")
+	}
+	body, _ := json.Marshal(map[string]string{"email": email, "password": password})
+	login, err := s.postLogin(APIClientsBase+loginClientsPath, body)
+	if errors.Is(err, errLoginEndpointMissing) {
+		login, err = s.postLogin(APIBase+loginPlatformPath, body)
+	}
+	if err != nil {
+		return err
+	}
+	s.email = email
+	s.password = password
+	s.applyLoginResult(login)
+	if s.cookiesPath != "" {
+		if saveErr := s.SaveCookiesToFile(s.cookiesPath); saveErr != nil {
+			return fmt.Errorf("login ok but save cookies failed: %w", saveErr)
+		}
+	}
+	return nil
+}
+
+func (s *Session) postLogin(target string, body []byte) (*LoginResponse, error) {
+	req, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	s.setBaseHeaders(req, "")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("login: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		return nil, errLoginEndpointMissing
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("login: status %d: %s", resp.StatusCode, string(raw))
+	}
+	var login LoginResponse
+	if err := json.Unmarshal(raw, &login); err != nil {
+		return nil, fmt.Errorf("login decode: %w", err)
+	}
+	if login.AccessToken == "" {
+		return nil, fmt.Errorf("login: empty access_token: %s", string(raw))
+	}
+	return &login, nil
+}
+
+func (s *Session) applyLoginResult(login *LoginResponse) {
+	s.AccessToken = login.AccessToken
+	s.UserID = login.User.ID
+	if exp, err := parseJWTExpiry(login.AccessToken); err == nil {
+		s.AccessTokenExp = exp
+	}
+	if login.RefreshToken != "" {
+		s.SetCookieInJar(refreshCookieName, login.RefreshToken)
+	}
+	s.SetCookieInJar(accessCookieName, login.AccessToken)
+}
+
 func (s *Session) callRefreshOnce() (*GuestAuthResponse, error) {
 	req, err := http.NewRequest(http.MethodPost, APIBase+"/platform/v1/auth/refresh/web", bytes.NewReader(nil))
 	if err != nil {
 		return nil, err
 	}
-	s.setBaseHeaders(req, s.AccessToken)
+	s.setBaseHeaders(req, "")
 	req.Header.Set("Content-Length", "0")
 
 	resp, err := s.HTTPClient.Do(req)
@@ -256,7 +345,7 @@ func (s *Session) applyRefreshResult(auth *GuestAuthResponse) {
 	if exp, err := parseJWTExpiry(auth.AccessToken); err == nil {
 		s.AccessTokenExp = exp
 	}
-	s.SetCookieInJar("vc-access-token", auth.AccessToken)
+	s.SetCookieInJar(accessCookieName, auth.AccessToken)
 }
 
 // Refresh runs /auth/refresh/web with single-flight locking, retries on
@@ -269,6 +358,9 @@ func (s *Session) Refresh() error {
 }
 
 func (s *Session) refreshLocked() error {
+	if !s.HasRefreshCookie() && s.HasCredentials() {
+		return s.LoginWithPassword(s.email, s.password)
+	}
 	var lastErr error
 	delay := refreshBaseDelay
 	for attempt := 1; attempt <= refreshMaxAttempts; attempt++ {
@@ -283,6 +375,9 @@ func (s *Session) refreshLocked() error {
 			return nil
 		}
 		if errors.Is(err, ErrSessionExpired) {
+			if s.HasCredentials() {
+				return s.LoginWithPassword(s.email, s.password)
+			}
 			return err
 		}
 		lastErr = err

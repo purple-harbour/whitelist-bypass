@@ -22,11 +22,9 @@ import (
 )
 
 const (
-	TmAPIBase                     = tmapi.APIBase
-	TmOrigin                      = tmapi.Origin
-	TmPingPeriod                  = 5 * time.Second
-	telemostReconnectInitialDelay = time.Second
-	telemostReconnectMaxDelay     = 16 * time.Second
+	TmAPIBase    = tmapi.APIBase
+	TmOrigin     = tmapi.Origin
+	TmPingPeriod = 5 * time.Second
 )
 
 type TelemostHeadlessJoiner struct {
@@ -65,6 +63,7 @@ type TelemostHeadlessJoiner struct {
 	obf         *tunnel.TunnelObfuscator
 	vp8FPS      int
 	vp8Batch    int
+	reliable    bool
 
 	httpClient *http.Client
 	instanceID string
@@ -82,6 +81,7 @@ type TelemostHeadlessJoiner struct {
 
 	stopCh           chan struct{}
 	stopOnce         sync.Once
+	configAck        configAckTracker
 	reconnectAttempt atomic.Int32
 
 	setSlotsKey     int
@@ -110,6 +110,7 @@ func (j *TelemostHeadlessJoiner) RunWithParams(jsonParams string) {
 		DisplayName string `json:"displayName"`
 		VP8FPS      int    `json:"vp8Fps"`
 		VP8Batch    int    `json:"vp8Batch"`
+		Reliable    bool   `json:"reliable"`
 	}
 	if err := json.Unmarshal([]byte(jsonParams), &params); err != nil {
 		j.logFn("telemost-joiner: failed to parse params: %v", err)
@@ -130,6 +131,7 @@ func (j *TelemostHeadlessJoiner) RunWithParams(jsonParams string) {
 	j.obf = obf
 	j.vp8FPS = params.VP8FPS
 	j.vp8Batch = params.VP8Batch
+	j.reliable = params.Reliable
 	j.logFn("telemost-joiner: link=%s name=%s vp8Fps=%d vp8Batch=%d localEpoch=0x%08x",
 		j.joinLink, j.displayName, params.VP8FPS, params.VP8Batch, obf.LocalEpoch())
 
@@ -168,20 +170,10 @@ func (j *TelemostHeadlessJoiner) runOnce() error {
 	return nil
 }
 
+func (j *TelemostHeadlessJoiner) MarkConfigAcked() { j.configAck.mark() }
+
 func (j *TelemostHeadlessJoiner) waitBeforeRetry(attempt int) bool {
-	delay := telemostReconnectInitialDelay << attempt
-	if delay > telemostReconnectMaxDelay || delay <= 0 {
-		delay = telemostReconnectMaxDelay
-	}
-	j.logFn("telemost-joiner: waiting %s before reconnect", delay)
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return !j.isClosed()
-	case <-j.stopCh:
-		return false
-	}
+	return waitReconnectBackoff(attempt, j.logFn, "telemost-joiner", j.stopCh, j.isClosed)
 }
 
 func (j *TelemostHeadlessJoiner) resetSessionState() {
@@ -214,9 +206,7 @@ func (j *TelemostHeadlessJoiner) Close() {
 	ws := j.ws
 	j.ws = nil
 	j.wsMu.Unlock()
-	if ws != nil {
-		ws.Close()
-	}
+	common.CloseWS(ws)
 	if j.vp8tunnel != nil {
 		j.vp8tunnel.Stop()
 	}
@@ -446,9 +436,10 @@ func (j *TelemostHeadlessJoiner) initPC() {
 
 	subPC.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		j.logFn("telemost-joiner: sub PC state: %s", state.String())
-		if state == webrtc.PeerConnectionStateFailed {
+		if state == webrtc.PeerConnectionStateFailed && !j.isClosed() {
 			j.logFn("telemost-joiner: ERROR: subscriber connection failed")
 			j.Status.EmitStatusError("subscriber connection failed")
+			go j.forceReconnect("subscriber connection failed")
 		}
 	})
 
@@ -479,16 +470,32 @@ func (j *TelemostHeadlessJoiner) initPC() {
 
 	pubPC.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		j.logFn("telemost-joiner: pub PC state: %s", state.String())
+		if state == webrtc.PeerConnectionStateFailed && !j.isClosed() {
+			j.logFn("telemost-joiner: ERROR: publisher connection failed")
+			j.Status.EmitStatusError("publisher connection failed")
+			go j.forceReconnect("publisher connection failed")
+		}
 		if state == webrtc.PeerConnectionStateConnected && j.vp8tunnel == nil {
 			j.reconnectAttempt.Store(0)
 			j.logFn("telemost-joiner: === VP8 TUNNEL CONNECTED ===")
 			j.Status.EmitStatus(common.StatusTunnelConnected)
 			j.vp8tunnel = tunnel.NewVP8DataTunnel(j.sampleTrack, j.obf, j.logFn)
-			j.vp8tunnel.Start(j.vp8FPS, j.vp8Batch)
-			j.vp8tunnel.SendData(tunnel.EncodeVP8Config(j.vp8tunnel.FPS(), j.vp8tunnel.Batch(), 1))
-			j.logFn("telemost-joiner: pushed vp8 config to creator fps=%d batch=%d", j.vp8tunnel.FPS(), j.vp8tunnel.Batch())
+			vp8tun := j.vp8tunnel
+			vp8tun.Start(j.vp8FPS, j.vp8Batch)
+			var active tunnel.DataTunnel = vp8tun
+			if j.reliable {
+				mt := tunnel.NewMultiTrackTunnel([]*tunnel.VP8DataTunnel{vp8tun})
+				active = tunnel.NewMultiTrackKCPTunnel(mt, j.logFn)
+				j.logFn("telemost-joiner: per-track kcp reliability active over video tunnel")
+			}
+			if !j.configAck.acknowledged() {
+				acked, cancel := j.configAck.arm()
+				go sendVP8ConfigUntilAcked(acked, cancel, j.stopCh, active,
+					vp8tun.FPS(), vp8tun.Batch(), 1, j.logFn, "telemost-joiner")
+				j.logFn("telemost-joiner: pushed vp8 config to creator fps=%d batch=%d", vp8tun.FPS(), vp8tun.Batch())
+			}
 			if j.OnConnected != nil {
-				j.OnConnected(j.vp8tunnel)
+				j.OnConnected(active)
 			}
 		}
 	})
@@ -585,9 +592,7 @@ func (j *TelemostHeadlessJoiner) forceReconnect(reason string) {
 	j.wsMu.Lock()
 	ws := j.ws
 	j.wsMu.Unlock()
-	if ws != nil {
-		ws.Close()
-	}
+	common.CloseWS(ws)
 }
 
 func (j *TelemostHeadlessJoiner) sendStartupSlotsRamp() {
@@ -741,7 +746,9 @@ func (j *TelemostHeadlessJoiner) handleMessage(raw []byte) {
 	}
 
 	if ud, ok := msg["updateDescription"]; ok {
-		j.logFn("telemost-joiner: <- updateDescription %s", tmapi.BriefJSON(ud))
+		if common.Debug {
+			j.logFn("telemost-joiner: <- updateDescription %s", tmapi.BriefJSON(ud))
+		}
 		j.ack(uid)
 		return
 	}
@@ -753,7 +760,9 @@ func (j *TelemostHeadlessJoiner) handleMessage(raw []byte) {
 	}
 
 	if sc, ok := msg["slotsConfig"]; ok {
-		j.logFn("telemost-joiner: <- slotsConfig %s", tmapi.BriefJSON(sc))
+		if common.Debug {
+			j.logFn("telemost-joiner: <- slotsConfig %s", tmapi.BriefJSON(sc))
+		}
 		needRebind := false
 		presentPids := make(map[string]bool)
 		for _, ev := range tmapi.SlotsConfigBindings(sc) {
@@ -807,7 +816,7 @@ func (j *TelemostHeadlessJoiner) handleMessage(raw []byte) {
 		}
 		j.boundMu.Unlock()
 		if needRebind {
-			go j.forceReconnect("slot binding killed")
+			j.logFn("telemost-joiner: slot kill/vanish observed - ignoring (tunnel data path is independent of slot binding)")
 		}
 		j.ack(uid)
 		return
@@ -817,7 +826,9 @@ func (j *TelemostHeadlessJoiner) handleMessage(raw []byte) {
 		if k == "uid" || k == "ack" {
 			continue
 		}
-		j.logFn("telemost-joiner: <- %s (unhandled) %s", k, tmapi.BriefJSON(v))
+		if common.Debug {
+			j.logFn("telemost-joiner: <- %s (unhandled) %s", k, tmapi.BriefJSON(v))
+		}
 		break
 	}
 

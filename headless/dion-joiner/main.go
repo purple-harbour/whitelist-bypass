@@ -24,7 +24,9 @@ func main() {
 	socksUser := flag.String("socks-user", "", "SOCKS5 username (optional)")
 	socksPass := flag.String("socks-pass", "", "SOCKS5 password (optional)")
 	resources := flag.String("resources", "default", "resource mode: moderate, default, unlimited")
+	debugFlag := flag.Bool("debug", false, "verbose debug logging")
 	flag.Parse()
+	common.Debug = *debugFlag
 
 	var memLimit int64
 	switch *resources {
@@ -128,4 +130,3 @@ func main() {
 		}
 	}
 }
-

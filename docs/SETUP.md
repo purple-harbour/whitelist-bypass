@@ -41,9 +41,9 @@
 6. Создайте звонок
 7. Скопируйте ссылку на звонок и отправьте на Joiner
 
-**Headless режим** - создание звонка без браузера. Сначала авторизуйтесь через обычный режим (VK или Telemost), затем используйте **Headless VK** / **Headless TM**.
+**Headless режим** - создание звонка без браузера. Кнопки **VK** / **Telemost** / **WBStream** / **DION** в панели вкладки. При первом запуске приложение само откроет окно логина нужной платформы.
 
-Если нужно запустить headless на сервере без GUI - экспортируйте куки кнопками **VK Cookies** / **Yandex Cookies** и используйте их с headless бинарниками (см. README).
+Если нужно запустить headless на сервере без GUI - нажмите **Export Cookies**, получите `cookies.zip` со всеми четырьмя файлами и используйте их с headless бинарниками.
 
 > Запуск десктопного Creator на VPS без графического окружения через XPRA - см. [docs/vps/SETUP.md](vps/SETUP.md).
 
@@ -53,12 +53,33 @@
 
 ### Подготовка кук
 
-Куки нужны для авторизации на платформе. Экспортируйте их из десктопного Creator:
+Куки нужны для авторизации на платформе, их требуют все четыре. Экспортируйте их из десктопного Creator:
 
 1. Откройте Creator на десктопе
-2. Авторизуйтесь в VK или Telemost через обычный режим
-3. Нажмите **VK Cookies** или **Yandex Cookies**
-4. Скопируйте полученный файл на сервер
+2. Авторизуйтесь в нужных платформах - проще всего один раз запустить headless-вкладку каждой, приложение само попросит логин
+3. Нажмите **Export Cookies** - получится `cookies.zip` с файлами `cookies-vk.json`, `cookies-yandex.json`, `cookies-wbstream.json`, `cookies-dion.json`
+4. Распакуйте и скопируйте нужные файлы на сервер
+
+### DION: логин по паролю
+
+У DION refresh-токен одноразовый: при каждом обновлении сервер выдаёт новый и убивает старый. Поэтому `cookies-dion.json` живёт иначе, чем остальные три файла - процесс сам перезаписывает его при каждом обновлении токена. Из этого следуют два правила:
+
+- файл должен быть доступен процессу на запись, и его нельзя подменять старой копией;
+- одна копия файла - один процесс. Если запустить тот же файл локально и на сервере, две копии будут убивать цепочку друг другу.
+
+Чтобы не переносить куки заново, положите в файл email и пароль - тогда процесс сам залогинится, когда refresh-токен всё же умрёт:
+
+```json
+{
+  "email": "you@example.com",
+  "password": "secret",
+  "cookies": []
+}
+```
+
+Такого файла достаточно для старта, куки допишутся сами после первого логина. В десктопном Creator то же самое делается кнопкой **Edit credentials** на карточке **DION account** - она появляется на DION-вкладке до запуска звонка, и после этого `Export Cookies` кладёт в зип уже готовый файл с логином.
+
+Старый формат - голый массив `[{"name": "...", "value": "..."}]` - по-прежнему читается.
 
 ### Запуск
 
@@ -69,8 +90,11 @@
 # Telemost
 ./headless-telemost-creator --cookies cookies-yandex.json
 
-# WB Stream (анонимный гостевой токен, куки не нужны)
-./headless-wbstream-creator
+# WB Stream
+./headless-wbstream-creator --cookies cookies-wbstream.json
+
+# DION
+./headless-dion-creator --cookies cookies-dion.json
 ```
 
 После запуска Creator создаст звонок и выведет ссылку в лог. Ссылку нужно передать на Joiner.
@@ -82,28 +106,31 @@
 ```sh
 ./headless-vk-creator       --cookies cookies.json        --vk-link https://vk.com/call/join/<token>
 ./headless-telemost-creator --cookies cookies-yandex.json --tm-link https://telemost.yandex.ru/j/<id>
-./headless-wbstream-creator --room wbstream://<uuid>
+./headless-wbstream-creator --cookies cookies-wbstream.json --room wbstream://<uuid>
+./headless-dion-creator     --cookies cookies-dion.json    --room dion://<id>
 ```
 
 ### Флаги
 
-| Флаг | VK | TM | WB | Описание |
-|---|---|---|---|---|
-| `--cookies <path>` | да | да | - | Путь к файлу с куками (JSON) |
-| `--cookie-string <str>` | да | да | - | Куки строкой (`name=val; name=val`) |
-| `--peer-id <id>` | да | - | - | VK peer_id для нового звонка |
-| `--vk-link <link>` | да | - | - | Подключиться к существующему VK звонку |
-| `--tm-link <uri>` | - | да | - | Подключиться к существующей Telemost конференции |
-| `--room <id>` | - | - | да | Подключиться к существующей WB Stream комнате |
-| `--resources <mode>` | да | да | да | `default` / `moderate` / `unlimited` / `custom` |
-| `--read-buf <bytes>` | да | да | да | Размер read-буфера, только с `--resources custom` |
-| `--max-dc-buf <bytes>` | да | - | - | Порог `BufferedAmountLowThreshold` DC, только с `--resources custom` |
-| `--mem-limit <bytes>` | да | да | да | Soft memory limit Go рантайма, только с `--resources custom` |
-| `--write-file <path>` | да | да | да | Файл, куда записывается активная ссылка на звонок |
-| `--upstream-socks <host:port>` | да | да | да | Гнать трафик joiner-а через локальный SOCKS5 прокси, например VPN-клиент |
-| `--upstream-user <user>` | да | да | да | Логин для upstream SOCKS5 |
-| `--upstream-pass <pass>` | да | да | да | Пароль для upstream SOCKS5 |
-| `--version` | да | да | да | Вывести версию и выйти |
+| Флаг | VK | TM | WB | DION | Описание |
+|---|---|---|---|---|---|
+| `--cookies <path>` | да | да | да | да | Путь к файлу с куками (JSON) |
+| `--cookie-string <str>` | да | да | - | - | Куки строкой (`name=val; name=val`) |
+| `--peer-id <id>` | да | - | - | - | VK peer_id для нового звонка |
+| `--vk-link <link>` | да | - | - | - | Подключиться к существующему VK звонку |
+| `--tm-link <uri>` | - | да | - | - | Подключиться к существующей Telemost конференции |
+| `--room <id>` | - | - | да | да | Подключиться к существующей комнате: `wbstream://<id>` для WB, `dion://<id>` для DION |
+| `--name <name>` | - | - | да | да | Отображаемое имя в комнате |
+| `--resources <mode>` | да | да | да | да | `default` / `moderate` / `unlimited` / `custom`; у DION без `custom` |
+| `--read-buf <bytes>` | да | да | да | - | Размер read-буфера, только с `--resources custom` |
+| `--max-dc-buf <bytes>` | да | - | - | - | Порог `BufferedAmountLowThreshold` DC, только с `--resources custom` |
+| `--mem-limit <bytes>` | да | да | да | - | Soft memory limit Go рантайма, только с `--resources custom` |
+| `--write-file <path>` | да | да | да | да | Файл, куда записывается активная ссылка на звонок |
+| `--upstream-socks <host:port>` | да | да | да | да | Гнать трафик joiner-а через локальный SOCKS5 прокси, например VPN-клиент |
+| `--upstream-user <user>` | да | да | да | да | Логин для upstream SOCKS5 |
+| `--upstream-pass <pass>` | да | да | да | да | Пароль для upstream SOCKS5 |
+| `--debug` | да | да | да | да | Подробные логи |
+| `--version` | да | да | да | да | Вывести версию и выйти |
 
 ### Выходной трафик через свой VPS
 
@@ -252,6 +279,8 @@ Standalone Go-бинарник `headless-vk-bot` - то же самое, что 
 
 При получении команды бот запускает соответствующий creator с `--write-file <tmp>`, ждёт появления линка в файле (до 60 секунд) и присылает его в чат. `--user-id` принимает список через запятую; если указан, команды от пользователей не из списка игнорируются.
 
+`--token` и `--upstream-pass` передавать через переменные окружения `VK_TOKEN` и `UPSTREAM_PASS`. Через окружение секреты не попадают в `ps` и `/proc/PID/cmdline`, которые читает любой пользователь на хосте, - `/proc/PID/environ` доступен только владельцу процесса.
+
 ### Запуск как systemd-сервис
 
 `/etc/systemd/system/wlb-vk-bot.service`:
@@ -301,6 +330,7 @@ curl -L https://raw.githubusercontent.com/kulikov0/whitelist-bypass/main/headles
 # отредактируйте .env: VK_TOKEN, VK_GROUP_ID, VK_USER_IDS
 # положите рядом cookies-vk.json, cookies-yandex.json, cookies-wbstream.json, cookies-dion.json
 # (для платформ, которые не используете - создайте файл с содержимым `[]`)
+sudo chown 999:999 cookies-dion.json
 docker compose up -d
 docker compose logs -f
 ```
@@ -326,6 +356,8 @@ docker compose pull && docker compose up -d
 | `UPSTREAM_SOCKS` | нет | - | `--upstream-socks` |
 | `UPSTREAM_USER` | нет | - | `--upstream-user` |
 | `UPSTREAM_PASS` | нет | - | `--upstream-pass` |
+
+> `cookies-dion.json` монтируется без `:ro`, в отличие от остальных трёх: DION выдаёт одноразовый refresh-токен, и creator перезаписывает файл при каждом обновлении. Контейнер работает под uid 999, поэтому файл на хосте должен принадлежать этому uid - иначе `/dion` упадёт с `save cookies failed: ... permission denied`. VK, Telemost и WB Stream куки только читают, их менять не нужно.
 
 > Если WebRTC-туннель не доходит через сетевой бридж Docker (UDP может отбрасываться), добавьте в `docker-compose.yml` строку `network_mode: host` под сервисом `bot`.
 

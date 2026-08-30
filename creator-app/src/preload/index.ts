@@ -26,8 +26,17 @@ import { IPC } from '../constants';
   setUpstreamProxy(proxy: any) {
     return ipcRenderer.invoke(IPC.SET_UPSTREAM_PROXY, proxy);
   },
+  setDebugLogging(enabled: boolean) {
+    return ipcRenderer.invoke(IPC.SET_DEBUG_LOGGING, enabled);
+  },
   clearCookies(platform: string) {
     return ipcRenderer.invoke(IPC.CLEAR_COOKIES, platform);
+  },
+  getDionCredentials() {
+    return ipcRenderer.invoke(IPC.GET_DION_CREDENTIALS);
+  },
+  setDionCredentials(email: string, password: string) {
+    return ipcRenderer.invoke(IPC.SET_DION_CREDENTIALS, email, password);
   },
   onCreateBotTab(cb: (data: any) => void) {
     ipcRenderer.on(IPC.CREATE_BOT_TAB, (_e, data) => cb(data));
@@ -40,6 +49,9 @@ import { IPC } from '../constants';
   },
   exportCookiesZip() {
     return ipcRenderer.invoke(IPC.EXPORT_COOKIES_ZIP);
+  },
+  renderQr(text: string) {
+    return ipcRenderer.invoke(IPC.RENDER_QR, text);
   },
   startHeadless(tabId: string, platform: string, args: any) {
     return ipcRenderer.invoke(IPC.START_HEADLESS, tabId, platform, args);

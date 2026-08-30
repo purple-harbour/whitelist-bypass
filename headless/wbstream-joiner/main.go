@@ -27,7 +27,10 @@ func main() {
 	vp8FPS := flag.Int("vp8-fps", 24, "VP8 frame rate (video mode only)")
 	vp8Batch := flag.Int("vp8-batch", 30, "VP8 batch multiplier (video mode only)")
 	dualTrack := flag.Bool("dual-track", false, "publish a second VP8 track as ScreenShare and shard outbound across both (video mode only)")
+	reliable := flag.Bool("reliable", false, "wrap the video tunnel with KCP reliability (video mode only)")
+	debugFlag := flag.Bool("debug", false, "verbose debug logging")
 	flag.Parse()
+	common.Debug = *debugFlag
 
 	if *roomFlag == "" {
 		log.Fatal("--room is required")
@@ -72,10 +75,12 @@ func main() {
 		VP8Batch:    *vp8Batch,
 		ScreenShare: *dualTrack,
 		IsJoiner:    true,
+		Reliable:    *reliable,
 	})
 	sess.OnConnected = func(tun tunnel.DataTunnel) {
 		readBuf := common.VP8BufSize
-		if _, ok := tun.(*tunnel.DCTunnel); ok {
+		switch tun.(type) {
+		case *tunnel.DCTunnel, *tunnel.MultiTrackKCPTunnel:
 			readBuf = common.DCBufSize
 		}
 		bridge := tunnel.NewRelayBridgeWithAuth(tun, "joiner", readBuf, log.Printf, *socksUser, *socksPass)

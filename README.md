@@ -165,24 +165,26 @@ Pure Go creators that create calls via API without a browser. No Electron, no JS
 ./build-headless.sh
 ```
 
-Six binaries are produced - three creators, two Linux joiners, and the VK bot:
+Eight binaries are produced - four creators, three Linux joiners, and the VK bot:
 
 ```sh
 ./headless/vk/headless-vk-creator               --cookies cookies-vk.json
 ./headless/telemost/headless-telemost-creator   --cookies cookies-yandex.json
-./headless/wbstream/headless-wbstream-creator
+./headless/wbstream/headless-wbstream-creator   --cookies cookies-wbstream.json
+./headless/dion/headless-dion-creator           --cookies cookies-dion.json
 ./headless/wbstream-joiner/headless-wbstream-joiner --room <link> --socks-port 1080
+./headless/dion-joiner/headless-dion-joiner         --room <link> --socks-port 1080
 ./headless/telemost-joiner/headless-telemost-joiner --tm-link <link> --socks-port 1080
 ./headless/vk-bot/headless-vk-bot               --token <t> --group-id <g> --bins-dir <dir>
 ```
 
-WB Stream uses anonymous guest tokens, so no cookies are required. VK and Telemost expect cookies exported from the desktop creator app (`VK Cookies` / `Yandex Cookies` buttons) as JSON `[{"name":"..","value":".."},...]`.
+All four creators need cookies exported from the desktop creator app (`Export Cookies` button) as JSON `[{"name":"..","value":".."},...]`. DION also accepts `{"email":"..","password":"..","cookies":[]}` and then logs in on its own, see [docs/SETUP.md](docs/SETUP.md).
 
 #### Common flags
 
 | Flag | VK | TM | WB | Description |
 |---|---|---|---|---|
-| `--cookies <path>` | yes | yes | - | path to cookies JSON |
+| `--cookies <path>` | yes | yes | yes | path to cookies JSON |
 | `--cookie-string <str>` | yes | yes | - | raw cookie string `name=val; name=val` |
 | `--write-file <path>` | yes | yes | yes | append the active join link to this file (one link per line) |
 | `--resources <mode>` | yes | yes | yes | `default` / `moderate` / `unlimited` / `custom` (see below) |
@@ -199,6 +201,7 @@ By default each binary creates a fresh call. To attach to an existing one (serve
 | VK | `--vk-link <link>` | `https://vk.com/call/join/<token>` |
 | Telemost | `--tm-link <uri>` | `https://telemost.yandex.ru/j/<id>` |
 | WB Stream | `--room <id>` | `wbstream://<uuid>` or just the UUID |
+| DION | `--room <id>` | `dion://<id>` or `https://dion.vc/event/<id>` |
 
 Mutually exclusive with the call-creation flags (`--peer-id` for VK; the others have no creation flag).
 

@@ -296,6 +296,25 @@ body {
   color: #888;
 }
 
+.headless-qr {
+  margin-top: 16px;
+}
+
+.headless-qr img {
+  width: 180px;
+  height: 180px;
+  display: block;
+  background: #fff;
+  padding: 8px;
+  border-radius: 6px;
+}
+
+.headless-qr-hint {
+  margin-top: 6px;
+  color: #888;
+  font-size: 12px;
+}
+
 .headless-link {
   color: #4fc3f7;
   cursor: pointer;
@@ -513,6 +532,9 @@ body {
   border-radius: 12px;
   padding: 24px;
   width: 400px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-sizing: border-box;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
@@ -546,6 +568,29 @@ body {
 
 .popup input:focus {
   border-color: #0077ff;
+}
+
+.popup .popup-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  cursor: pointer;
+}
+
+.popup .popup-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: #0077ff;
+  flex: none;
+}
+
+.popup .popup-check span {
+  font-size: 14px;
+  color: #e0e0e0;
+  font-weight: 500;
 }
 
 .popup-buttons {

@@ -273,9 +273,7 @@ func (b *Bridge) forceReconnect(reason string) {
 	b.mu.Lock()
 	ws := b.ws
 	b.mu.Unlock()
-	if ws != nil {
-		ws.Close()
-	}
+	common.CloseWS(ws)
 }
 
 func (b *Bridge) sendInitBundle() {
@@ -379,7 +377,9 @@ func (b *Bridge) handleMessage(raw []byte) {
 	}
 
 	if ud, ok := msg["updateDescription"]; ok {
-		log.Printf("[tm-ws] <- updateDescription %s", tmapi.BriefJSON(ud))
+		if common.Debug {
+			log.Printf("[tm-ws] <- updateDescription %s", tmapi.BriefJSON(ud))
+		}
 		udMap, _ := ud.(map[string]interface{})
 		descs, _ := udMap["description"].([]interface{})
 		b.applyDescriptionSnapshot(descs)
@@ -440,7 +440,9 @@ func (b *Bridge) handleMessage(raw []byte) {
 	}
 
 	if sc, ok := msg["slotsConfig"]; ok {
-		log.Printf("[tm-ws] <- slotsConfig %s", tmapi.BriefJSON(sc))
+		if common.Debug {
+			log.Printf("[tm-ws] <- slotsConfig %s", tmapi.BriefJSON(sc))
+		}
 		needRebind := false
 		presentPids := make(map[string]bool)
 		for _, ev := range tmapi.SlotsConfigBindings(sc) {
@@ -494,7 +496,7 @@ func (b *Bridge) handleMessage(raw []byte) {
 		}
 		b.mu.Unlock()
 		if needRebind {
-			go b.forceReconnect("slot binding killed")
+			log.Printf("[bind] slot kill/vanish observed - ignoring (tunnel data path is independent of slot binding)")
 		}
 		b.ack(uid)
 		return
@@ -707,7 +709,7 @@ func (b *Bridge) initRelay() {
 	relay.OnPubReady = func() {
 		log.Printf("[relay] pub PC connected")
 	}
-	relay.OnConnected = func(tun *tunnel.VP8DataTunnel) {
+	relay.OnConnected = func(tun tunnel.DataTunnel) {
 		if b.activeBridge != nil {
 			b.activeBridge.Reset()
 		}
@@ -891,7 +893,9 @@ func main() {
 	upstreamSocks := flag.String("upstream-socks", "", "route tunneled egress through this SOCKS5 proxy (host:port), e.g. a local VPN client")
 	upstreamUser := flag.String("upstream-user", "", "upstream SOCKS5 username")
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
+	debugFlag := flag.Bool("debug", false, "verbose debug logging")
 	flag.Parse()
+	common.Debug = *debugFlag
 
 	var readBuf int
 	var memLimit int64

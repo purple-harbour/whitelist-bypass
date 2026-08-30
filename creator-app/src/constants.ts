@@ -9,12 +9,12 @@ export const BOT_POLL_RETRY_DELAY_MS = 1000;
 export const BOT_POLL_WAIT_SECONDS = 25;
 
 export const VK_API_VERSION = '5.131';
-export const VK_API_BASE_URL = 'https://api.vk.com/method';
-export const VK_IM_URL = 'https://vk.com/im';
+export const VK_API_BASE_URL = 'https://api.vk.ru/method';
+export const VK_IM_URL = 'https://vk.ru/im';
 export const TELEMOST_URL = 'https://telemost.yandex.ru/';
 export const DION_URL = 'https://dion.vc/';
 
-export const VK_LOGIN_URL = 'https://vk.com/';
+export const VK_LOGIN_URL = 'https://vk.ru/';
 export const YANDEX_LOGIN_URL = 'https://passport.yandex.ru/auth?retpath=https%3A%2F%2Ftelemost.yandex.ru%2F';
 export const DION_LOGIN_URL = 'https://dion.vc/login';
 export const WBSTREAM_LOGIN_URL = 'https://stream.wb.ru/login';
@@ -31,7 +31,7 @@ export const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
   'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
 
-export const VK_COOKIE_DOMAINS = ['vk.com', 'vk.ru'];
+export const VK_COOKIE_DOMAINS = ['vk.ru'];
 export const YANDEX_COOKIE_DOMAINS = ['yandex.ru', 'yandex.net', 'ya.ru'];
 export const DION_COOKIE_DOMAINS = ['dion.vc'];
 export const WBSTREAM_COOKIE_DOMAINS = ['stream.wb.ru', 'wb.ru', 'wildberries.ru'];
@@ -59,8 +59,12 @@ export enum IPC {
   START_BOT = 'start-bot',
   STOP_BOT = 'stop-bot',
   SET_UPSTREAM_PROXY = 'set-upstream-proxy',
+  SET_DEBUG_LOGGING = 'set-debug-logging',
   CLEAR_COOKIES = 'clear-cookies',
+  GET_DION_CREDENTIALS = 'get-dion-credentials',
+  SET_DION_CREDENTIALS = 'set-dion-credentials',
   EXPORT_COOKIES_ZIP = 'export-cookies-zip',
+  RENDER_QR = 'render-qr',
   RELAY_LOG = 'relay-log',
   CREATE_BOT_TAB = 'create-bot-tab',
   CLOSE_BOT_TAB = 'close-bot-tab',

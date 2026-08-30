@@ -8,6 +8,8 @@ import (
 
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+
+	"whitelist-bypass/relay/common"
 )
 
 var legacyVP8Keyframe = []byte{
@@ -190,11 +192,13 @@ func (t *VP8LegacyTunnel) writerLoop() {
 					}
 				}
 				if err := t.track.WriteSample(media.Sample{Data: sample, Duration: sampleInterval}); err != nil {
-					t.logFn("vp8tunnel-legacy: WriteSample error: %v", err)
+					if common.Debug {
+						t.logFn("vp8tunnel-legacy: WriteSample error: %v", err)
+					}
 					continue
 				}
 				n := t.sentFrames.Add(1)
-				if n <= 5 || n%500 == 0 {
+				if common.Debug && (n <= 5 || n%500 == 0) {
 					t.logFn("vp8tunnel-legacy: sent frame #%d size=%d", n, len(sample))
 				}
 			}
@@ -228,7 +232,7 @@ func (t *VP8LegacyTunnel) HandleFrame(frame []byte) {
 		return
 	}
 	n := t.recvFrames.Add(1)
-	if n <= 5 || n%500 == 0 {
+	if common.Debug && (n <= 5 || n%500 == 0) {
 		t.logFn("vp8tunnel-legacy: recv frame #%d size=%d", n, len(payload))
 	}
 	if t.OnData != nil {

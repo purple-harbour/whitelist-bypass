@@ -39,7 +39,7 @@ type iosStatusEmitter struct {
 	statusFn func(string)
 }
 
-func (e *iosStatusEmitter) EmitStatus(status string)  { e.statusFn(status) }
+func (e *iosStatusEmitter) EmitStatus(status string)   { e.statusFn(status) }
 func (e *iosStatusEmitter) EmitStatusError(msg string) { e.statusFn("ERROR:" + msg) }
 
 type iosCacheStore struct {
@@ -47,9 +47,9 @@ type iosCacheStore struct {
 }
 
 func (c *iosCacheStore) Save(key string, value string) { c.callback.SaveCache(key, value) }
-func (c *iosCacheStore) Load(key string) string         { return c.callback.LoadCache(key) }
+func (c *iosCacheStore) Load(key string) string        { return c.callback.LoadCache(key) }
 
-func makeOnConnected(socksPort int, socksUser, socksPass string, logFn func(string, ...any), callback HeadlessCallback) func(tunnel.DataTunnel) {
+func makeOnConnected(socksPort int, socksUser, socksPass string, logFn func(string, ...any), callback HeadlessCallback, onConfigAck func()) func(tunnel.DataTunnel) {
 	return func(tun tunnel.DataTunnel) {
 		activeHeadless.Lock()
 		if activeHeadless.stopped {
@@ -61,15 +61,22 @@ func makeOnConnected(socksPort int, socksUser, socksPass string, logFn func(stri
 
 		if existing != nil {
 			existing.SwapTunnel(tun)
+			if onConfigAck != nil {
+				existing.SetOnConfigAck(onConfigAck)
+			}
 			logFn("ios: tunnel swapped after reconnect")
 			return
 		}
 
 		readBuf := common.VP8BufSize
-		if _, ok := tun.(*tunnel.DCTunnel); ok {
+		switch tun.(type) {
+		case *tunnel.DCTunnel, *tunnel.MultiTrackKCPTunnel:
 			readBuf = common.DCBufSize
 		}
 		bridge := tunnel.NewRelayBridgeWithAuth(tun, "joiner", readBuf, logFn, socksUser, socksPass)
+		if onConfigAck != nil {
+			bridge.SetOnConfigAck(onConfigAck)
+		}
 		bridge.SetPersistentListener(true)
 		bridge.MarkReady()
 
@@ -116,6 +123,8 @@ func makeHelpers(callback HeadlessCallback) (func(string, ...any), joiner.Resolv
 func init() {
 }
 
+func SetDebug(enabled bool) { common.Debug = enabled }
+
 func StartWBStreamHeadless(socksPort int, socksUser, socksPass string, callback HeadlessCallback) {
 	StopHeadless()
 
@@ -127,7 +136,7 @@ func StartWBStreamHeadless(socksPort int, socksUser, socksPass string, callback 
 
 	logFn, resolveFn, statusEmitter := makeHelpers(callback)
 	wbJoiner := joiner.NewWBStreamHeadlessJoiner(logFn, resolveFn, statusEmitter, nil)
-	wbJoiner.OnConnected = makeOnConnected(socksPort, socksUser, socksPass, logFn, callback)
+	wbJoiner.OnConnected = makeOnConnected(socksPort, socksUser, socksPass, logFn, callback, wbJoiner.MarkConfigAcked)
 
 	activeHeadless.Lock()
 	activeHeadless.joiner = wbJoiner
@@ -147,7 +156,7 @@ func StartDionHeadless(socksPort int, socksUser, socksPass string, callback Head
 
 	logFn, resolveFn, statusEmitter := makeHelpers(callback)
 	dionJoiner := joiner.NewDionHeadlessJoiner(logFn, resolveFn, statusEmitter, nil)
-	dionJoiner.OnConnected = makeOnConnected(socksPort, socksUser, socksPass, logFn, callback)
+	dionJoiner.OnConnected = makeOnConnected(socksPort, socksUser, socksPass, logFn, callback, nil)
 
 	activeHeadless.Lock()
 	activeHeadless.joiner = dionJoiner
@@ -167,7 +176,7 @@ func StartTelemostHeadless(socksPort int, socksUser, socksPass string, callback 
 
 	logFn, resolveFn, statusEmitter := makeHelpers(callback)
 	tmJoiner := joiner.NewTelemostHeadlessJoiner(logFn, resolveFn, statusEmitter, nil, pion.AddTunnelTracks, pion.ReadTrack)
-	tmJoiner.OnConnected = makeOnConnected(socksPort, socksUser, socksPass, logFn, callback)
+	tmJoiner.OnConnected = makeOnConnected(socksPort, socksUser, socksPass, logFn, callback, tmJoiner.MarkConfigAcked)
 
 	activeHeadless.Lock()
 	activeHeadless.joiner = tmJoiner
@@ -187,7 +196,7 @@ func StartVKHeadless(socksPort int, socksUser, socksPass string, joinLink, displ
 
 	logFn, resolveFn, statusEmitter := makeHelpers(callback)
 	vkJoiner := joiner.NewVKHeadlessJoiner(logFn, resolveFn, statusEmitter, nil, pion.AddTunnelTracks, pion.ReadTrack)
-	vkJoiner.OnConnected = makeOnConnected(socksPort, socksUser, socksPass, logFn, callback)
+	vkJoiner.OnConnected = makeOnConnected(socksPort, socksUser, socksPass, logFn, callback, vkJoiner.MarkConfigAcked)
 
 	activeHeadless.Lock()
 	activeHeadless.joiner = vkJoiner

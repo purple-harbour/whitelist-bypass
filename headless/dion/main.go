@@ -25,7 +25,9 @@ func main() {
 	upstreamSocks := flag.String("upstream-socks", "", "route tunneled egress through this SOCKS5 proxy (host:port), e.g. a local VPN client")
 	upstreamUser := flag.String("upstream-user", "", "upstream SOCKS5 username")
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
+	debugFlag := flag.Bool("debug", false, "verbose debug logging")
 	flag.Parse()
+	common.Debug = *debugFlag
 
 	var memLimit int64
 	switch *resources {
@@ -53,6 +55,12 @@ func main() {
 	}
 	if err := auth.LoadCookiesFromFile(*cookiesPath); err != nil {
 		log.Fatalf("[FATAL] LoadCookiesFromFile: %v", err)
+	}
+	if !auth.HasCredentials() && !auth.HasRefreshCookie() {
+		log.Fatalf("[FATAL] %s has neither cookies nor credentials, add \"email\" and \"password\" fields to it", *cookiesPath)
+	}
+	if auth.HasCredentials() {
+		log.Printf("[auth] credentials present, session will re-login automatically when the refresh token dies")
 	}
 	if err := auth.EnsureValidToken(); err != nil {
 		log.Fatalf("[FATAL] EnsureValidToken: %v", err)

@@ -37,6 +37,7 @@ type statusEmitter struct{}
 
 var tunnelLostCh = make(chan struct{}, 1)
 var selfHealReconnect bool
+var joinerConfigAck func()
 
 func (statusEmitter) EmitStatus(status string) {
 	log.Printf("[status] %s", status)
@@ -108,6 +109,7 @@ func main() {
 	dns := flag.String("dns", "1.1.1.1,8.8.8.8", "comma-separated DNS servers for the tunnel adapter")
 	noTun := flag.Bool("no-tun", false, "expose SOCKS5 only, do not bring up the wintun adapter")
 	dualTrack := flag.Bool("dual-track", false, "VK/WB Stream: dual-track tunnel (second screenshare channel) for higher throughput")
+	reliable := flag.Bool("reliable", false, "WB Stream: wrap the video tunnel with KCP reliability (video mode only)")
 	flag.Parse()
 
 	if *platform == "" || *link == "" {
@@ -252,10 +254,16 @@ func main() {
 		// listener instead of binding a second one
 		if bridge != nil {
 			bridge.SwapTunnel(t)
+			if joinerConfigAck != nil {
+				bridge.SetOnConfigAck(joinerConfigAck)
+			}
 			log.Printf("[socks] tunnel swapped after reconnect")
 			return
 		}
 		bridge = tunnel.NewRelayBridgeWithAuth(t, "joiner", readBuf, log.Printf, *socksUser, *socksPass)
+		if joinerConfigAck != nil {
+			bridge.SetOnConfigAck(joinerConfigAck)
+		}
 		bridge.SetPersistentListener(true)
 		bridge.MarkReady()
 		addr := fmt.Sprintf("%s:%d", *socksHost, *socksPort)
@@ -274,7 +282,7 @@ func main() {
 
 	switch strings.ToLower(*platform) {
 	case "wbstream", "wb":
-		runWBStream(*link, *displayName, *tunnelMode, *vp8FPS, *vp8Batch, *dualTrack,
+		runWBStream(*link, *displayName, *tunnelMode, *vp8FPS, *vp8Batch, *dualTrack, *reliable,
 			onConnected, addCandidate)
 	case "telemost", "tm":
 		runTelemost(*link, *displayName, *vp8FPS, *vp8Batch,
@@ -329,7 +337,7 @@ func signalingHosts(platform, link string) []string {
 		}
 		return hosts
 	case "vk":
-		hosts := []string{"vk.com", "login.vk.com", "api.vk.com", "ok.ru", "cloud-api.yandex.ru"}
+		hosts := []string{"vk.ru", "login.vk.ru", "api.vk.ru", "ok.ru", "cloud-api.yandex.ru"}
 		if u, err := url.Parse(strings.TrimSpace(link)); err == nil && u.Host != "" {
 			hosts = append(hosts, u.Host)
 		}
@@ -340,7 +348,7 @@ func signalingHosts(platform, link string) []string {
 	return nil
 }
 
-func runWBStream(link, name, mode string, fps, batch int, dualTrack bool,
+func runWBStream(link, name, mode string, fps, batch int, dualTrack, reliable bool,
 	onConnected func(tunnel.DataTunnel),
 	onCandidate func(int, string),
 ) {
@@ -366,7 +374,9 @@ func runWBStream(link, name, mode string, fps, batch int, dualTrack bool,
 		VP8FPS:      fps,
 		VP8Batch:    batch,
 		ScreenShare: dualTrack,
+		Reliable:    reliable,
 	})
+	joinerConfigAck = sess.MarkConfigAcked
 	sess.OnConnected = onConnected
 	sess.OnRemoteCandidate = onCandidate
 
@@ -387,6 +397,7 @@ func runTelemost(link, name string, fps, batch int,
 		pion.AddTunnelTracks,
 		pion.ReadTrack,
 	)
+	joinerConfigAck = inner.MarkConfigAcked
 	inner.OnConnected = onConnected
 	inner.OnRemoteCandidate = onCandidate
 
@@ -438,6 +449,7 @@ func runVK(link, name, mode string, fps, batch int, dualTrack bool,
 		pion.AddTunnelTracks,
 		pion.ReadTrack,
 	)
+	joinerConfigAck = inner.MarkConfigAcked
 	inner.OnConnected = onConnected
 	inner.OnRemoteCandidate = onCandidate
 	go inner.RunWithParams(string(patched))

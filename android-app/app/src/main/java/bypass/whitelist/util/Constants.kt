@@ -66,6 +66,8 @@ object PrefsKeys {
     const val VP8_FPS = "vp8_fps"
     const val VP8_BATCH = "vp8_batch"
     const val DUAL_TRACK = "dual_track"
+    const val RELIABLE = "reliable"
+    const val DEBUG = "debug"
     const val SAVED_DESTINATIONS = "saved_destinations"
     const val ACTIVE_DESTINATION_ID = "active_destination_id"
     const val THEME_MODE = "theme_mode"
@@ -84,6 +86,9 @@ object Vpn {
     const val ADDRESS = "10.0.0.2"
     const val PREFIX_LENGTH = 32
     const val ROUTE = "0.0.0.0"
+    const val ADDRESS6 = "fd00::2"
+    const val PREFIX_LENGTH6 = 128
+    const val ROUTE6 = "::"
     const val MTU = 1500
     const val DNS_PRIMARY = "8.8.8.8"
     const val DNS_SECONDARY = "8.8.4.4"

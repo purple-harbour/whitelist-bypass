@@ -61,7 +61,7 @@ func readScreenDataChannel(dc *webrtc.DataChannel, handler func([]byte), logFn f
 		var raw datachannel.ReadWriteCloser
 		raw, err := dc.Detach()
 		if err != nil {
-			logFn("headless: screen DC detach failed, using OnMessage: %v", err)
+			logFn("vk-joiner: screen DC detach failed, using OnMessage: %v", err)
 			dc.OnMessage(func(m webrtc.DataChannelMessage) {
 				if !m.IsString && len(m.Data) > 0 {
 					frame := make([]byte, len(m.Data))
@@ -71,7 +71,7 @@ func readScreenDataChannel(dc *webrtc.DataChannel, handler func([]byte), logFn f
 			})
 			return
 		}
-		logFn("headless: screen DC attached for reading")
+		logFn("vk-joiner: screen DC attached for reading")
 		buf := make([]byte, common.RTPBufSize)
 		for {
 			n, isString, rerr := raw.ReadDataChannel(buf)
@@ -92,10 +92,10 @@ func attachScreenWriterDC(dc *webrtc.DataChannel, onRaw func(io.WriteCloser), lo
 	dc.OnOpen(func() {
 		raw, err := dc.Detach()
 		if err != nil {
-			logFn("headless: screen writer DC detach failed: %v", err)
+			logFn("vk-joiner: screen writer DC detach failed: %v", err)
 			return
 		}
-		logFn("headless: screen DC attached for writing")
+		logFn("vk-joiner: screen DC attached for writing")
 		onRaw(raw)
 	})
 }

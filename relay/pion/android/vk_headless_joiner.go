@@ -58,12 +58,14 @@ func NewVKHeadlessJoiner(logFn func(string, ...any)) *VKHeadlessJoiner {
 	return wrapper
 }
 
+func (h *VKHeadlessJoiner) MarkConfigAcked() { h.inner.MarkConfigAcked() }
+
 func (h *VKHeadlessJoiner) Run() {
 	h.inner.Status.EmitStatus(common.StatusReady)
 	for {
 		line, err := ReadStdinLine()
 		if err != nil {
-			log.Printf("headless: stdin closed: %v", err)
+			log.Printf("vk-joiner: stdin closed: %v", err)
 			return
 		}
 		if strings.HasPrefix(line, "JOIN:") {
@@ -87,7 +89,7 @@ func (h *VKHeadlessJoiner) runWithAuth(jsonParams string) {
 		DualTrack   bool   `json:"dualTrack"`
 	}
 	if err := json.Unmarshal([]byte(jsonParams), &params); err != nil {
-		log.Printf("headless: failed to parse auth params: %v", err)
+		log.Printf("vk-joiner: failed to parse auth params: %v", err)
 		h.inner.Status.EmitStatusError("bad params: " + err.Error())
 		return
 	}
