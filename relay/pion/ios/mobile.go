@@ -3,7 +3,6 @@ package ios
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"sync"
 
 	"whitelist-bypass/relay/common"
@@ -29,7 +28,6 @@ var activeHeadless struct {
 	sync.Mutex
 	joiner   joinerHandle
 	callback HeadlessCallback
-	socksLn  net.Listener
 	bridge   *tunnel.RelayBridge
 	stopped  bool
 	platform string
@@ -120,9 +118,6 @@ func makeHelpers(callback HeadlessCallback) (func(string, ...any), joiner.Resolv
 	return logFn, resolveFn, statusEmitter
 }
 
-func init() {
-}
-
 func SetDebug(enabled bool) { common.Debug = enabled }
 
 func StartWBStreamHeadless(socksPort int, socksUser, socksPass string, callback HeadlessCallback) {
@@ -180,6 +175,26 @@ func StartTelemostHeadless(socksPort int, socksUser, socksPass string, callback 
 
 	activeHeadless.Lock()
 	activeHeadless.joiner = tmJoiner
+	activeHeadless.Unlock()
+
+	callback.OnStatus(common.StatusReady)
+}
+
+func StartBitrixHeadless(socksPort int, socksUser, socksPass string, callback HeadlessCallback) {
+	StopHeadless()
+
+	activeHeadless.Lock()
+	activeHeadless.callback = callback
+	activeHeadless.stopped = false
+	activeHeadless.platform = "bitrix"
+	activeHeadless.Unlock()
+
+	logFn, resolveFn, statusEmitter := makeHelpers(callback)
+	bxJoiner := joiner.NewBitrixHeadlessJoiner(logFn, resolveFn, statusEmitter, nil)
+	bxJoiner.OnConnected = makeOnConnected(socksPort, socksUser, socksPass, logFn, callback, bxJoiner.MarkConfigAcked)
+
+	activeHeadless.Lock()
+	activeHeadless.joiner = bxJoiner
 	activeHeadless.Unlock()
 
 	callback.OnStatus(common.StatusReady)
@@ -255,6 +270,10 @@ func SendJoinParams(jsonParams string) {
 		if dionJoiner, ok := currentJoiner.(*joiner.DionHeadlessJoiner); ok {
 			go dionJoiner.RunWithParams(jsonParams)
 		}
+	case "bitrix":
+		if bxJoiner, ok := currentJoiner.(*joiner.BitrixHeadlessJoiner); ok {
+			go bxJoiner.RunWithParams(jsonParams)
+		}
 	}
 }
 
@@ -266,10 +285,8 @@ func StopHeadless() {
 	activeHeadless.Lock()
 	activeHeadless.stopped = true
 	currentJoiner := activeHeadless.joiner
-	socksLn := activeHeadless.socksLn
 	bridge := activeHeadless.bridge
 	activeHeadless.joiner = nil
-	activeHeadless.socksLn = nil
 	activeHeadless.bridge = nil
 	activeHeadless.callback = nil
 	activeHeadless.platform = ""
@@ -281,8 +298,5 @@ func StopHeadless() {
 	}
 	if bridge != nil {
 		bridge.Close()
-	}
-	if socksLn != nil {
-		socksLn.Close()
 	}
 }

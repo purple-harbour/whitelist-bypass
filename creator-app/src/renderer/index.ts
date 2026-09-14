@@ -15,8 +15,9 @@ import {
   attachLoginWebview,
   detachLoginWebview,
 } from './dom';
+import { SavedCallsView } from './saved-calls';
 import { VK_IM_URL, TELEMOST_URL } from '../constants';
-import { Platform, Bridge, BotTabData, LogPanel, TunnelMode, HeadlessMode } from '../types';
+import { Platform, Bridge, BotTabData, LogPanel, TunnelMode, HeadlessMode, SavedCall } from '../types';
 
 declare const window: Window & { bridge: Bridge };
 
@@ -24,7 +25,10 @@ const tm = new RendererTabManager(() => {
   renderTabs(tm);
   renderContent(tm);
   renderBotButton(tm);
+  renderSaveStars();
 });
+
+const savedCalls = new SavedCallsView((call: SavedCall) => tm.startSavedCall(call));
 
 function bindTabBarEvents(): void {
   document.getElementById('tabBar')!.addEventListener('click', (event) => {
@@ -34,6 +38,7 @@ function bindTabBarEvents(): void {
     const tabId = tabEl?.dataset.tabId;
 
     if (action === 'add-tab') {
+      savedCalls.hide();
       tm.createTab();
       return;
     }
@@ -48,6 +53,7 @@ function bindTabBarEvents(): void {
       return;
     }
     if (tabId) {
+      savedCalls.hide();
       tm.selectTab(tabId);
     }
   });
@@ -60,6 +66,7 @@ function bindToolbarEvents(): void {
   document.getElementById('btnHeadlessTM')!.addEventListener('click', () => tm.switchToHeadless(Platform.Telemost));
   document.getElementById('btnHeadlessWB')!.addEventListener('click', () => tm.switchToHeadless(Platform.WBStream));
   document.getElementById('btnHeadlessDion')!.addEventListener('click', () => tm.switchToHeadless(Platform.Dion));
+  document.getElementById('btnHeadlessBitrix')!.addEventListener('click', () => tm.switchToHeadless(Platform.Bitrix));
   document.getElementById('modeSelect')!.addEventListener('change', (event) => {
     tm.setTunnelMode((event.target as HTMLSelectElement).value);
   });
@@ -108,39 +115,50 @@ function bindSettingsEvents(): void {
   });
 }
 
-function bindDionAccountEvents(): void {
-  document.getElementById('btnDionAccount')!.addEventListener('click', openDionAccount);
-  document.getElementById('dionAccountPopup')!.addEventListener('click', closeDionAccount);
-  document.querySelector('#dionAccountPopup .popup')!.addEventListener('click', (event) => event.stopPropagation());
-  document.getElementById('btnDionAccountCancel')!.addEventListener('click', closeDionAccount);
-  document.getElementById('btnDionAccountSave')!.addEventListener('click', async () => {
-    const email = (document.getElementById('dionEmail') as HTMLInputElement).value.trim();
-    const password = (document.getElementById('dionPassword') as HTMLInputElement).value;
-    const status = document.getElementById('dionAccountStatus')!;
+interface AccountPopupConfig {
+  name: string;
+  fields: string[];
+  load: () => Promise<Record<string, string>>;
+  save: (values: Record<string, string>) => Promise<void>;
+  readError: string;
+}
+
+function bindAccountPopup(cfg: AccountPopupConfig): void {
+  const lc = cfg.name.toLowerCase();
+  const popup = document.getElementById(`${lc}AccountPopup`)!;
+  const status = document.getElementById(`${lc}AccountStatus`)!;
+  const field = (key: string) =>
+    document.getElementById(`${lc}${key[0].toUpperCase()}${key.slice(1)}`) as HTMLInputElement;
+
+  const close = (): void => popup.classList.remove('visible');
+  const open = async (): Promise<void> => {
+    status.textContent = '';
+    popup.classList.add('visible');
     try {
-      await window.bridge.setDionCredentials(email, password);
-      closeDionAccount();
+      const values = await cfg.load();
+      for (const key of cfg.fields) field(key).value = values[key] ?? '';
+    } catch {
+      status.textContent = cfg.readError;
+    }
+  };
+
+  document.getElementById(`btn${cfg.name}Account`)!.addEventListener('click', open);
+  popup.addEventListener('click', close);
+  popup.querySelector('.popup')!.addEventListener('click', (event) => event.stopPropagation());
+  document.getElementById(`btn${cfg.name}AccountCancel`)!.addEventListener('click', close);
+  document.getElementById(`btn${cfg.name}AccountSave`)!.addEventListener('click', async () => {
+    const values: Record<string, string> = {};
+    for (const key of cfg.fields) {
+      const raw = field(key).value;
+      values[key] = key === 'password' ? raw : raw.trim();
+    }
+    try {
+      await cfg.save(values);
+      close();
     } catch {
       status.textContent = 'Failed to save the credentials.';
     }
   });
-}
-
-async function openDionAccount(): Promise<void> {
-  const status = document.getElementById('dionAccountStatus')!;
-  status.textContent = '';
-  document.getElementById('dionAccountPopup')!.classList.add('visible');
-  try {
-    const credentials = await window.bridge.getDionCredentials();
-    (document.getElementById('dionEmail') as HTMLInputElement).value = credentials.email;
-    (document.getElementById('dionPassword') as HTMLInputElement).value = credentials.password;
-  } catch {
-    status.textContent = 'Failed to read the session file.';
-  }
-}
-
-function closeDionAccount(): void {
-  document.getElementById('dionAccountPopup')!.classList.remove('visible');
 }
 
 function bindErrorPopup(): void {
@@ -166,6 +184,7 @@ function bindHeadlessEvents(): void {
       const sourceEl = document.getElementById(copyTarget);
       if (sourceEl) copyToClipboard(sourceEl.textContent || '');
     }
+    if (target.dataset.action === 'save-call') toggleActiveCallSaved();
   });
   document.getElementById('btnHeadlessCreate')!.addEventListener('click', () => {
     clearHeadlessJoinError();
@@ -186,6 +205,28 @@ function bindHeadlessEvents(): void {
     const tab = tm.getActiveTab();
     if (tab) tab.headlessStartTarget = (event.target as HTMLInputElement).value;
     clearHeadlessJoinError();
+  });
+}
+
+function toggleActiveCallSaved(): void {
+  const tab = tm.getActiveTab();
+  const joinLink = tab?.callInfo?.joinLink;
+  if (!tab || !tab.platform || !joinLink) return;
+  if (savedCalls.has(tab.platform, joinLink)) {
+    savedCalls.remove(joinLink);
+  } else {
+    savedCalls.add(tab.platform, joinLink, tm.getTabLabel(tab));
+  }
+  renderSaveStars();
+}
+
+function renderSaveStars(): void {
+  const tab = tm.getActiveTab();
+  const joinLink = tab?.callInfo?.joinLink;
+  const saved = !!tab?.platform && !!joinLink && savedCalls.has(tab.platform, joinLink);
+  document.querySelectorAll('.headless-save').forEach((star) => {
+    star.classList.toggle('saved', saved);
+    star.setAttribute('title', saved ? 'Saved, click to forget' : 'Save this call');
   });
 }
 
@@ -224,10 +265,24 @@ function init(): void {
   bindToolbarEvents();
   bindActionBarEvents();
   bindSettingsEvents();
-  bindDionAccountEvents();
+  bindAccountPopup({
+    name: 'Dion',
+    fields: ['email', 'password'],
+    load: async () => ({ ...(await window.bridge.getDionCredentials()) }),
+    save: (v) => window.bridge.setDionCredentials(v.email, v.password),
+    readError: 'Failed to read the session file.',
+  });
+  bindAccountPopup({
+    name: 'Bitrix',
+    fields: ['portal', 'email', 'password'],
+    load: async () => ({ ...(await window.bridge.getBitrixCredentials()) }),
+    save: (v) => window.bridge.setBitrixCredentials(v.portal, v.email, v.password),
+    readError: 'Failed to read the account file.',
+  });
   bindErrorPopup();
   bindLogEvents();
   bindHeadlessEvents();
+  savedCalls.bindEvents();
 
   window.bridge.setUpstreamProxy(tm.upstreamProxy);
 
@@ -253,6 +308,8 @@ function init(): void {
       tm.switchToHeadless(Platform.WBStream, data.joinTarget);
     } else if (data.mode === TunnelMode.HeadlessDion) {
       tm.switchToHeadless(Platform.Dion, data.joinTarget);
+    } else if (data.mode === TunnelMode.HeadlessBitrix) {
+      tm.switchToHeadless(Platform.Bitrix, data.joinTarget);
     } else {
       const url = data.platform === Platform.Telemost ? TELEMOST_URL : VK_IM_URL;
       loadURL(tm, url);

@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"strings"
 
-	"whitelist-bypass/relay/common"
+	"github.com/kulikov0/headless-client"
 )
 
 const (
@@ -71,9 +71,14 @@ type connectionDetailsResponse struct {
 }
 
 func httpDo(client *http.Client, req *http.Request) (*http.Response, error) {
-	req.Header.Set("User-Agent", common.UserAgent)
+	req.Header.Set("User-Agent", headless.ChromeWindows.UserAgent())
+	for name, values := range headless.ChromeWindows.Headers(headless.DestEmpty) {
+		if _, present := req.Header[name]; !present {
+			req.Header[name] = values
+		}
+	}
 	if client == nil {
-		client = http.DefaultClient
+		client = headless.ChromeWindows.HTTPClient()
 	}
 	return client.Do(req)
 }
@@ -87,7 +92,7 @@ func (t *cookieTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Cookie", t.cookie)
 	base := t.base
 	if base == nil {
-		base = http.DefaultTransport
+		base = headless.ChromeWindows.HTTPClient().Transport
 	}
 	return base.RoundTrip(req)
 }
@@ -97,7 +102,7 @@ func clientWithCookies(client *http.Client, cookieHeader string) *http.Client {
 		return client
 	}
 	if client == nil {
-		client = &http.Client{}
+		client = headless.ChromeWindows.HTTPClient()
 	}
 	wrapped := *client
 	wrapped.Transport = &cookieTransport{base: client.Transport, cookie: cookieHeader}
@@ -267,10 +272,10 @@ func newRequestID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-func RefreshAccessToken(client *http.Client, cookieHeader, deviceID string) (string, error) {
+func RefreshAccessToken(client *http.Client, cookieHeader, deviceID string) (string, map[string]string, error) {
 	req, err := http.NewRequest(http.MethodPost, "https://auth-stream.wb.ru/v2/auth/slide-v3", bytes.NewReader(nil))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if deviceID == "" {
 		deviceID = newRequestID()
@@ -282,28 +287,30 @@ func RefreshAccessToken(client *http.Client, cookieHeader, deviceID string) (str
 	req.Header.Set("Origin", Origin)
 	req.Header.Set("Referer", Origin+"/")
 	req.Header.Set("Cookie", cookieHeader)
-	req.Header.Set("User-Agent", common.UserAgent)
 
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := httpDo(client, req)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
+	rotated := make(map[string]string)
+	for _, ck := range resp.Cookies() {
+		if ck.Value != "" {
+			rotated[ck.Name] = ck.Value
+		}
+	}
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("slide-v3: status %d: %s", resp.StatusCode, string(raw))
+		return "", nil, fmt.Errorf("slide-v3: status %d: %s", resp.StatusCode, string(raw))
 	}
 	var r slideV3Response
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return "", fmt.Errorf("slide-v3 decode: %w", err)
+		return "", nil, fmt.Errorf("slide-v3 decode: %w", err)
 	}
 	if r.Payload.AccessToken == "" {
-		return "", fmt.Errorf("slide-v3: empty access_token in response: %s", string(raw))
+		return "", nil, fmt.Errorf("slide-v3: empty access_token in response: %s", string(raw))
 	}
-	return r.Payload.AccessToken, nil
+	return r.Payload.AccessToken, rotated, nil
 }
 
 func joinAndGetDetails(client *http.Client, accessToken, roomID, displayName string) (string, string, string, string, error) {
@@ -351,7 +358,7 @@ func SetParticipantPermissions(client *http.Client, accessToken, roomID, partici
 
 func KickParticipant(client *http.Client, accessToken, roomID, participantID string) error {
 	if client == nil {
-		client = http.DefaultClient
+		client = headless.ChromeWindows.HTTPClient()
 	}
 	kickURL := fmt.Sprintf("%s/api-room-manager/api/v1/room/%s/participant/%s/kick", APIBase, roomID, participantID)
 	req, err := http.NewRequest("DELETE", kickURL, strings.NewReader("{}"))
@@ -360,8 +367,7 @@ func KickParticipant(client *http.Client, accessToken, roomID, participantID str
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", common.UserAgent)
-	resp, err := client.Do(req)
+	resp, err := httpDo(client, req)
 	if err != nil {
 		return err
 	}

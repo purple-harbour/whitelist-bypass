@@ -1,6 +1,6 @@
 {
   "name": "whitelist-bypass-creator",
-  "version": "0.3.8",
+  "version": "0.4.0",
   "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc",
@@ -70,6 +70,10 @@
         {
           "from": "../headless/headless-dion-darwin",
           "to": "headless-dion-creator"
+        },
+        {
+          "from": "../headless/headless-bitrix-darwin",
+          "to": "headless-bitrix-creator"
         }
       ]
     },
@@ -97,6 +101,10 @@
         {
           "from": "../headless/headless-dion-bundle.exe",
           "to": "headless-dion-creator.exe"
+        },
+        {
+          "from": "../headless/headless-bitrix-bundle.exe",
+          "to": "headless-bitrix-creator.exe"
         }
       ]
     },
@@ -124,6 +132,10 @@
         {
           "from": "../headless/headless-dion-bundle",
           "to": "headless-dion-creator"
+        },
+        {
+          "from": "../headless/headless-bitrix-bundle",
+          "to": "headless-bitrix-creator"
         }
       ]
     }

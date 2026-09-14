@@ -8,8 +8,10 @@ import {
   Bridge,
   HeadlessMode,
   HeadlessStartArgs,
+  SavedCall,
 } from '../types';
 import { HeadlessLogMarker } from '../constants';
+import { appendLogText, appendLogElement, trimLogText } from './log-buffer';
 
 declare const window: Window & { bridge: Bridge };
 
@@ -70,6 +72,10 @@ export class RendererTabManager {
         tab.mode = TunnelMode.HeadlessDion;
         if (!tab.isBot) tab.name = 'DION';
         break;
+      case Platform.Bitrix:
+        tab.mode = TunnelMode.HeadlessBitrix;
+        if (!tab.isBot) tab.name = 'Bitrix';
+        break;
       default:
         tab.mode = TunnelMode.HeadlessVK;
         if (!tab.isBot) tab.name = 'VK';
@@ -109,11 +115,13 @@ export class RendererTabManager {
         data.mode === TunnelMode.HeadlessVK ||
         data.mode === TunnelMode.HeadlessTelemost ||
         data.mode === TunnelMode.HeadlessWBStream ||
-        data.mode === TunnelMode.HeadlessDion;
+        data.mode === TunnelMode.HeadlessDion ||
+        data.mode === TunnelMode.HeadlessBitrix;
       let platformName = 'VK';
       if (data.platform === Platform.Telemost) platformName = 'Telemost';
       else if (data.platform === Platform.WBStream) platformName = 'WBStream';
       else if (data.platform === Platform.Dion) platformName = 'DION';
+      else if (data.platform === Platform.Bitrix) platformName = 'Bitrix';
       const botName = isHeadless ? `Bot-${platformName}` : `Bot-${platformName} (legacy)`;
       this.tabs[data.tabId] = {
         wv: null,
@@ -154,8 +162,8 @@ export class RendererTabManager {
     if (this.activeTabId && this.tabs[this.activeTabId]) {
       const relayEl = document.getElementById('relayLog');
       const hookEl = document.getElementById('hookLog');
-      if (relayEl) this.tabs[this.activeTabId].relayLogs = relayEl.textContent || '';
-      if (hookEl) this.tabs[this.activeTabId].hookLogs = hookEl.textContent || '';
+      if (relayEl) this.tabs[this.activeTabId].relayLogs = trimLogText(relayEl.textContent || '');
+      if (hookEl) this.tabs[this.activeTabId].hookLogs = trimLogText(hookEl.textContent || '');
     }
   }
 
@@ -177,16 +185,12 @@ export class RendererTabManager {
   appendRelayLog(tabId: string, msg: string): void {
     const tab = this.tabs[tabId];
     if (!tab) return;
-    tab.relayLogs += (tab.relayLogs ? '\n' : '') + msg;
+    tab.relayLogs = appendLogText(tab.relayLogs, msg);
     let rendered = false;
     if (tab.headless) rendered = this.parseHeadlessLog(tabId, msg);
     if (tabId === this.activeTabId && !rendered) {
       const el = document.getElementById('relayLog');
-      if (el) {
-        if (el.textContent!.length > 0) el.textContent += '\n';
-        el.textContent += msg;
-        el.scrollTop = el.scrollHeight;
-      }
+      if (el) appendLogElement(el, msg);
     }
   }
 
@@ -252,6 +256,17 @@ export class RendererTabManager {
   saveDebugLogging(): void {
     localStorage.setItem('debugLogging', String(this.debugLogging));
     window.bridge.setDebugLogging(this.debugLogging);
+  }
+
+  startSavedCall(call: SavedCall): void {
+    this.createTab();
+    this.switchToHeadless(call.platform);
+    const tab = this.getActiveTab();
+    if (!tab) return;
+    tab.name = call.name;
+    tab.headlessStartTarget = call.target;
+    tab.joinedByLink = true;
+    this.startHeadlessCall({ mode: HeadlessMode.Join, target: call.target });
   }
 
   toggleBot(): void {

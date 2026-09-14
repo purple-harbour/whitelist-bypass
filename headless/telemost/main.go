@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"runtime/debug"
@@ -15,8 +14,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
-	"github.com/pion/webrtc/v4"
+	"github.com/kulikov0/headless-client"
+	"github.com/kulikov0/headless-client/webrtc"
+	"github.com/kulikov0/headless-client/websocket"
 	"whitelist-bypass/relay/common"
 	tmapi "whitelist-bypass/relay/telemost"
 	"whitelist-bypass/relay/tunnel"
@@ -60,9 +60,12 @@ type Bridge struct {
 
 	setSlotsKey    int
 	initBundleSent bool
+	shareMu        sync.Mutex
+	shareEnabled   bool
 	pendingKicks   map[string]chan struct{}
 	boundPeers     map[string]bool
 	unboundPeers   map[string]bool
+	seenPids       map[string]bool
 }
 
 func tmRequest(method, path string, body interface{}, cookieStr string, cfg TMConfig) ([]byte, int, error) {
@@ -203,7 +206,7 @@ func (b *Bridge) sendHello() {
 			"participantId": b.connInfo.PeerID, "roomId": b.connInfo.RoomID,
 			"serviceName": b.connInfo.ServiceName, "credentials": b.connInfo.Credentials,
 			"capabilitiesOffer":   tmapi.CapabilitiesOffer,
-			"sdkInfo":             map[string]interface{}{"implementation": "browser", "version": b.config.SDKVersion, "userAgent": common.UserAgent, "hwConcurrency": 8},
+			"sdkInfo":             map[string]interface{}{"implementation": "browser", "version": b.config.SDKVersion, "userAgent": headless.ChromeWindows.UserAgent(), "hwConcurrency": 8},
 			"sdkInitializationId": uuid.New().String(),
 			"disablePublisher":    false, "disableSubscriber": false, "disableSubscriberAudio": false,
 		},
@@ -217,20 +220,67 @@ func (b *Bridge) sendPubOffer() {
 		log.Printf("[tm-ws] pub offer failed: %v", err)
 		return
 	}
-	audioMid, videoMid := parseMids(offer.SDP)
-	log.Printf("[tm-ws] -> publisherSdpOffer pcSeq=%d", b.pubSeq)
+	b.sendPublisherOffer(offer, false)
+}
+
+func (b *Bridge) sendPublisherOffer(offer webrtc.SessionDescription, includeSharing bool) {
+	audioMids, videoMids := parseMids(offer.SDP)
+	log.Printf("[tm-ws] -> publisherSdpOffer pcSeq=%d includeSharing=%v audio=%v video=%v", b.pubSeq, includeSharing, audioMids, videoMids)
 
 	var tracks []map[string]interface{}
-	if audioMid != "" {
-		tracks = append(tracks, map[string]interface{}{"mid": audioMid, "transceiverMid": audioMid, "kind": "AUDIO", "priority": 0, "label": "", "codecs": map[string]interface{}{}, "groupId": 1, "description": ""})
+	if len(audioMids) > 0 {
+		tracks = append(tracks, map[string]interface{}{"mid": audioMids[0], "transceiverMid": audioMids[0], "kind": "AUDIO", "priority": 0, "label": "", "codecs": map[string]interface{}{}, "groupId": 1, "description": ""})
 	}
-	if videoMid != "" {
-		tracks = append(tracks, map[string]interface{}{"mid": videoMid, "transceiverMid": videoMid, "kind": "VIDEO", "priority": 0, "label": "", "codecs": map[string]interface{}{}, "groupId": 2, "description": ""})
+	if len(videoMids) > 0 {
+		tracks = append(tracks, map[string]interface{}{"mid": videoMids[0], "transceiverMid": videoMids[0], "kind": "VIDEO", "priority": 0, "label": "", "codecs": map[string]interface{}{}, "groupId": 1, "description": ""})
+	}
+	if includeSharing {
+		tracks = append(tracks, tmapi.DisplayVideoTrack("Screen"))
 	}
 	b.wsSend(map[string]interface{}{
 		"uid":               uuid.New().String(),
 		"publisherSdpOffer": map[string]interface{}{"pcSeq": b.pubSeq, "sdp": offer.SDP, "tracks": tracks},
 	})
+}
+
+func (b *Bridge) enableScreenshare() {
+	b.shareMu.Lock()
+	defer b.shareMu.Unlock()
+	if b.shareEnabled {
+		return
+	}
+	b.shareEnabled = true
+	log.Printf("[ss] enabling screenshare: describe DISPLAY_VIDEO -> updateMe -> offer")
+	if err := b.relay.AddSharingDataChannel(); err != nil {
+		log.Printf("[ss] AddSharingDataChannel: %v", err)
+		return
+	}
+	b.wsSend(tmapi.UpdatePublisherSharingTrackMessage("Screen"))
+	b.wsSend(tmapi.UpdateMeMessage(b.selfName, true, true))
+	offer, err := b.relay.CreatePubRenegotiate()
+	if err != nil {
+		log.Printf("[ss] enable renegotiate failed: %v", err)
+		return
+	}
+	b.sendPublisherOffer(offer, true)
+}
+
+func (b *Bridge) disableScreenshare() {
+	b.shareMu.Lock()
+	defer b.shareMu.Unlock()
+	if !b.shareEnabled {
+		return
+	}
+	b.shareEnabled = false
+	log.Printf("[ss] disabling screenshare (peer requested trackCount<2)")
+	b.wsSend(tmapi.UpdateMeMessage(b.selfName, true, false))
+	b.relay.RemoveSharingDataChannel()
+	offer, err := b.relay.CreatePubRenegotiate()
+	if err != nil {
+		log.Printf("[ss] disable renegotiate failed: %v", err)
+		return
+	}
+	b.sendPublisherOffer(offer, false)
 }
 
 func (b *Bridge) sendICE(cand *webrtc.ICECandidate, target string, pcSeq int) {
@@ -251,29 +301,6 @@ func (b *Bridge) sendICE(cand *webrtc.ICECandidate, target string, pcSeq int) {
 			"sdpMlineIndex":    idx, "target": target, "pcSeq": pcSeq,
 		},
 	})
-}
-
-func (b *Bridge) requestVideoSlots() {
-	b.setSlotsKey++
-	log.Printf("[tm-ws] -> setSlots key=%d", b.setSlotsKey)
-	b.wsSend(tmapi.SetSlotsMessage(b.setSlotsKey))
-}
-
-func (b *Bridge) forceReconnect(reason string) {
-	oldPeerID := b.connInfo.PeerID
-	log.Printf("[tm-ws] forcing reconnect: %s", reason)
-	if oldPeerID != "" {
-		log.Printf("[tm-ws] kicking self pid=%s to leave call cleanly", oldPeerID)
-		if err := b.kickPeer(oldPeerID); err != nil {
-			log.Printf("[tm-ws] self-kick failed: %v", err)
-		}
-	}
-	clientInstanceID = uuid.New().String()
-	log.Printf("[tm-ws] new instance-id=%s", clientInstanceID)
-	b.mu.Lock()
-	ws := b.ws
-	b.mu.Unlock()
-	common.CloseWS(ws)
 }
 
 func (b *Bridge) sendInitBundle() {
@@ -394,7 +421,6 @@ func (b *Bridge) handleMessage(raw []byte) {
 			dm, _ := d.(map[string]interface{})
 			b.applyDescriptionEntry(dm)
 		}
-		b.kickStaleSelves()
 		b.ack(uid)
 		return
 	}
@@ -571,10 +597,15 @@ func (b *Bridge) applyDescriptionEntry(dm map[string]interface{}) {
 	_, disconnected := dm["disconnectedAt"]
 	b.mu.Lock()
 	_, wasKnown := b.peers[pid]
+	newArrival := false
 	if disconnected {
 		delete(b.peers, pid)
 	} else {
 		b.peers[pid] = name
+		if !b.seenPids[pid] {
+			b.seenPids[pid] = true
+			newArrival = true
+		}
 	}
 	total := len(b.peers)
 	b.mu.Unlock()
@@ -584,8 +615,9 @@ func (b *Bridge) applyDescriptionEntry(dm map[string]interface{}) {
 	case disconnected:
 		log.Printf("[tm-ws] Ghost participant: %s (%s) - kicking", name, pid)
 		go b.kickPeer(pid)
-	case !wasKnown:
+	case newArrival:
 		log.Printf("[tm-ws] Participant joined: %s (%s) total=%d", name, pid, total)
+		b.keepOnly(pid)
 	}
 }
 
@@ -597,27 +629,23 @@ func (b *Bridge) applyDescriptionSnapshot(descs []interface{}) {
 		dm, _ := d.(map[string]interface{})
 		b.applyDescriptionEntry(dm)
 	}
-	b.kickStaleSelves()
 }
 
-func (b *Bridge) kickStaleSelves() {
+func (b *Bridge) keepOnly(keepPid string) {
 	b.mu.Lock()
-	selfName := b.selfName
-	stale := make([]string, 0)
-	if selfName != "" {
-		for pid, name := range b.peers {
-			if name == selfName {
-				stale = append(stale, pid)
-			}
+	victims := make([]string, 0, len(b.peers))
+	for pid := range b.peers {
+		if pid != keepPid {
+			victims = append(victims, pid)
 		}
 	}
-	b.mu.Unlock()
-	for _, pid := range stale {
-		log.Printf("[tm-ws] Kicking stale self %s (name=%q)", pid, selfName)
-		b.kickPeer(pid)
-		b.mu.Lock()
+	for _, pid := range victims {
 		delete(b.peers, pid)
-		b.mu.Unlock()
+	}
+	b.mu.Unlock()
+	for _, pid := range victims {
+		log.Printf("[tm-ws] 1:1 evict %s", pid)
+		go b.kickPeer(pid)
 	}
 }
 
@@ -715,6 +743,13 @@ func (b *Bridge) initRelay() {
 		}
 		b.activeBridge = tunnel.NewRelayBridge(tun, "creator", common.VP8BufSize, log.Printf)
 		b.activeBridge.SetUpstreamSocks(b.upstreamSocks, b.upstreamUser, b.upstreamPass)
+		b.activeBridge.SetOnPeerConfig(func(fps, batch, trackCount int) {
+			if trackCount >= 2 {
+				b.enableScreenshare()
+			} else {
+				b.disableScreenshare()
+			}
+		})
 		fmt.Print("\n  TUNNEL CONNECTED\n")
 	}
 	relay.OnPeerRestart = func() {
@@ -747,13 +782,14 @@ func (b *Bridge) run() {
 	fmt.Println("  join_link:", b.connInfo.ConferenceURI)
 	fmt.Printf("  protocol:  sdk %s app %s\n\n", b.config.SDKVersion, b.config.AppVersion)
 
-	wsHeader := http.Header{}
-	wsHeader.Set("User-Agent", common.UserAgent)
+	wsHeader := headless.ChromeWindows.Headers(headless.DestWebSocket)
 	wsHeader.Set("Origin", tmOrigin)
+
+	dialer := headless.ChromeWindows.WebSocketDialer(headless.TLSOptions{})
 
 	for {
 		log.Println("[tm-ws] Connecting...")
-		ws, _, err := websocket.DefaultDialer.Dial(b.connInfo.MediaServerURL, wsHeader)
+		ws, _, err := dialer.Dial(b.connInfo.MediaServerURL, wsHeader)
 		if err != nil {
 			log.Printf("[tm-ws] Connect failed: %s, retrying in 5s...", common.MaskError(err))
 			time.Sleep(5 * time.Second)
@@ -843,6 +879,13 @@ func (b *Bridge) run() {
 			time.Sleep(5 * time.Second)
 			continue
 		}
+		if oldPid := b.connInfo.PeerID; oldPid != "" && oldPid != newConn.PeerID {
+			b.mu.Lock()
+			b.seenPids[oldPid] = true
+			delete(b.peers, oldPid)
+			b.mu.Unlock()
+			go b.kickPeer(oldPid)
+		}
 		b.connInfo.PeerID = newConn.PeerID
 		b.connInfo.Credentials = newConn.Credentials
 		b.connInfo.MediaServerURL = newConn.MediaServerURL
@@ -851,20 +894,22 @@ func (b *Bridge) run() {
 	}
 }
 
-func parseMids(sdp string) (audioMid, videoMid string) {
+func parseMids(sdp string) (audioMids, videoMids []string) {
 	var media string
 	for _, line := range strings.Split(sdp, "\r\n") {
 		if strings.HasPrefix(line, "m=audio") {
 			media = "audio"
 		} else if strings.HasPrefix(line, "m=video") {
 			media = "video"
+		} else if strings.HasPrefix(line, "m=") {
+			media = ""
 		}
 		if strings.HasPrefix(line, "a=mid:") {
 			mid := strings.TrimPrefix(line, "a=mid:")
-			if media == "audio" && audioMid == "" {
-				audioMid = mid
-			} else if media == "video" && videoMid == "" {
-				videoMid = mid
+			if media == "audio" {
+				audioMids = append(audioMids, mid)
+			} else if media == "video" {
+				videoMids = append(videoMids, mid)
 			}
 		}
 	}
@@ -894,8 +939,10 @@ func main() {
 	upstreamUser := flag.String("upstream-user", "", "upstream SOCKS5 username")
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
 	debugFlag := flag.Bool("debug", false, "verbose debug logging")
+	allowPrivate := flag.Bool("allow-private-dst", false, "let the joiner reach private/internal addresses through this creator")
 	flag.Parse()
 	common.Debug = *debugFlag
+	common.AllowPrivateDst = *allowPrivate
 
 	var readBuf int
 	var memLimit int64
@@ -940,6 +987,11 @@ func main() {
 		cookieStr = strings.TrimSpace(line)
 	}
 
+	if common.CookieValue(cookieStr, "Session_id") == "" {
+		common.EmitAuthError(common.AuthErrorSessionExpired)
+		log.Fatalf("[auth] cookies missing Session_id; log into Yandex and re-export via creator-app's 'Export Cookies' button")
+	}
+
 	log.Println("[config] Fetching live config from Telemost bundle...")
 	cfg, err := fetchConfig()
 	if err != nil {
@@ -950,11 +1002,13 @@ func main() {
 	if *tmLink != "" {
 		connInfo, err = joinExistingConference(cookieStr, *tmLink, cfg)
 		if err != nil {
+			common.EmitAuthErrorFor(err)
 			log.Fatalf("Failed to join existing conference: %v", err)
 		}
 	} else {
 		connInfo, err = createAndJoinCall(cookieStr, cfg)
 		if err != nil {
+			common.EmitAuthErrorFor(err)
 			log.Fatalf("Failed to create call: %v", err)
 		}
 	}
@@ -974,6 +1028,7 @@ func main() {
 		config:        cfg,
 		cookieStr:     cookieStr,
 		peers:         make(map[string]string),
+		seenPids:      make(map[string]bool),
 		readBuf:       readBuf,
 		upstreamSocks: *upstreamSocks,
 		upstreamUser:  *upstreamUser,

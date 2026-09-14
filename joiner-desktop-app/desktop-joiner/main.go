@@ -24,13 +24,13 @@ import (
 	"syscall"
 	"time"
 
-	joinerCommon "whitelist-bypass/relay/pion/headless-joiner-common"
 	"whitelist-bypass/relay/common"
+	"whitelist-bypass/relay/desktoptun"
 	"whitelist-bypass/relay/dion"
 	"whitelist-bypass/relay/pion"
+	joinerCommon "whitelist-bypass/relay/pion/headless-joiner-common"
 	"whitelist-bypass/relay/tunnel"
 	"whitelist-bypass/relay/wbstream"
-	"whitelist-bypass/relay/desktoptun"
 )
 
 type statusEmitter struct{}
@@ -95,7 +95,7 @@ const (
 )
 
 func main() {
-	platform := flag.String("platform", "", "wbstream | telemost | vk | dion (required)")
+	platform := flag.String("platform", "", "wbstream | telemost | vk | dion | bitrix (required)")
 	link := flag.String("link", "", "WB Stream room link, Telemost join URI, VK call link, or DION event link (required)")
 	displayName := flag.String("name", "Joiner", "display name in the room")
 	socksHost := flag.String("socks-host", common.SocksLocalhostIP, "SOCKS5 listen address (use 0.0.0.0 to expose on LAN; tun2socks always connects via loopback)")
@@ -175,9 +175,11 @@ func main() {
 	tunReady := make(chan struct{})
 	var tunOnce sync.Once
 	var (
-		pendingMu      sync.Mutex
-		pending        []string
-		tunStarted     bool
+		pendingMu  sync.Mutex
+		pending    []string
+		pendingIPs []net.IP
+		seenIPs    = map[string]struct{}{}
+		tunStarted bool
 	)
 	bringUpTun := func() {
 		tunOnce.Do(func() {
@@ -197,12 +199,19 @@ func main() {
 			}
 			pendingMu.Lock()
 			drained := pending
+			drainedIPs := pendingIPs
 			pending = nil
+			pendingIPs = nil
 			tunStarted = true
 			pendingMu.Unlock()
 			for _, c := range drained {
 				if err := tun.AddBypassFromCandidate(c); err != nil {
 					log.Printf("[bypass] replay: %v", err)
+				}
+			}
+			for _, ip := range drainedIPs {
+				if err := tun.AddBypassIP(ip); err != nil {
+					log.Printf("[bypass] replay ip %s: %v", ip, err)
 				}
 			}
 			fmt.Printf("\n  TUNNEL ACTIVE on adapter %q (DNS=%s)\n  all traffic now egresses via %s\n\n",
@@ -236,6 +245,36 @@ func main() {
 					tryBypass(line)
 				}
 			}
+		}
+	}
+
+	bypassIP := func(ipStr string) {
+		if tun == nil {
+			return
+		}
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			return
+		}
+		v4 := ip.To4()
+		if v4 == nil {
+			return
+		}
+		key := v4.String()
+		pendingMu.Lock()
+		if _, ok := seenIPs[key]; ok {
+			pendingMu.Unlock()
+			return
+		}
+		seenIPs[key] = struct{}{}
+		if !tunStarted {
+			pendingIPs = append(pendingIPs, v4)
+			pendingMu.Unlock()
+			return
+		}
+		pendingMu.Unlock()
+		if err := tun.AddBypassIP(v4); err != nil {
+			log.Printf("[bypass] ip %s: %v", key, err)
 		}
 	}
 
@@ -285,7 +324,7 @@ func main() {
 		runWBStream(*link, *displayName, *tunnelMode, *vp8FPS, *vp8Batch, *dualTrack, *reliable,
 			onConnected, addCandidate)
 	case "telemost", "tm":
-		runTelemost(*link, *displayName, *vp8FPS, *vp8Batch,
+		runTelemost(*link, *displayName, *vp8FPS, *vp8Batch, *dualTrack, *reliable,
 			onConnected, addCandidate)
 	case "vk":
 		selfHealReconnect = true
@@ -293,6 +332,9 @@ func main() {
 			onConnected, addCandidate)
 	case "dion", "dn":
 		runDion(*link, *displayName, onConnected, addCandidate)
+	case "bitrix", "bx":
+		runBitrix(*link, *displayName, *tunnelMode, *vp8FPS, *vp8Batch, *dualTrack, *reliable,
+			onConnected, addCandidate, bypassIP)
 	default:
 		log.Fatalf("[config] unknown --platform %q", *platform)
 	}
@@ -385,7 +427,7 @@ func runWBStream(link, name, mode string, fps, batch int, dualTrack, reliable bo
 	}
 }
 
-func runTelemost(link, name string, fps, batch int,
+func runTelemost(link, name string, fps, batch int, dualTrack, reliable bool,
 	onConnected func(tunnel.DataTunnel),
 	onCandidate func(int, string),
 ) {
@@ -406,11 +448,15 @@ func runTelemost(link, name string, fps, batch int,
 		DisplayName string `json:"displayName"`
 		VP8FPS      int    `json:"vp8Fps"`
 		VP8Batch    int    `json:"vp8Batch"`
+		DualTrack   bool   `json:"dualTrack"`
+		Reliable    bool   `json:"reliable"`
 	}{
 		JoinLink:    strings.TrimSpace(link),
 		DisplayName: name,
 		VP8FPS:      fps,
 		VP8Batch:    batch,
+		DualTrack:   dualTrack,
+		Reliable:    reliable,
 	})
 	go inner.RunWithParams(string(params))
 }
@@ -495,6 +541,49 @@ func runDion(link, name string,
 		default:
 		}
 	}()
+}
+
+func runBitrix(link, name, mode string, fps, batch int, dualTrack, reliable bool,
+	onConnected func(tunnel.DataTunnel),
+	onCandidate func(int, string),
+	bypassIP func(string),
+) {
+	resolve := func(host string) (string, error) {
+		ip, err := resolveHostname(host)
+		if err == nil {
+			bypassIP(ip)
+		}
+		return ip, err
+	}
+
+	inner := joinerCommon.NewBitrixHeadlessJoiner(
+		log.Printf,
+		resolve,
+		statusEmitter{},
+		nil,
+	)
+	joinerConfigAck = inner.MarkConfigAcked
+	inner.OnConnected = onConnected
+	inner.OnRemoteCandidate = onCandidate
+
+	params, _ := json.Marshal(struct {
+		JoinLink    string `json:"joinLink"`
+		DisplayName string `json:"displayName"`
+		TunnelMode  string `json:"tunnelMode"`
+		VP8FPS      int    `json:"vp8Fps"`
+		VP8Batch    int    `json:"vp8Batch"`
+		DualTrack   bool   `json:"dualTrack"`
+		Reliable    bool   `json:"reliable"`
+	}{
+		JoinLink:    strings.TrimSpace(link),
+		DisplayName: name,
+		TunnelMode:  mode,
+		VP8FPS:      fps,
+		VP8Batch:    batch,
+		DualTrack:   dualTrack,
+		Reliable:    reliable,
+	})
+	go inner.RunWithParams(string(params))
 }
 
 func resolveHostname(hostname string) (string, error) {

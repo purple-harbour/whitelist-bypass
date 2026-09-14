@@ -16,13 +16,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/webrtc/v4"
+	headless "github.com/kulikov0/headless-client"
+	"github.com/kulikov0/headless-client/webrtc"
 	"whitelist-bypass/relay/common"
 	"whitelist-bypass/relay/tunnel"
 	"whitelist-bypass/relay/wtsignal"
 )
 
 const TopologyDirect = "DIRECT"
+
+const vkOrigin = "https://vk.ru"
 const maxServerBounces = 5
 
 type CallInfo struct {
@@ -102,34 +105,17 @@ func httpPost(endpoint string, form url.Values, extraHeaders map[string]string) 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", common.UserAgent)
+	req.Header.Set("User-Agent", headless.ChromeWindows.UserAgent())
 	req.Header.Set("Origin", "https://vk.ru")
 	req.Header.Set("Referer", "https://vk.ru/")
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := headless.ChromeWindows.HTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
-}
-
-func httpGet(endpoint string) ([]byte, error) {
-	req, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", common.UserAgent)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if strings.Contains(resp.Request.URL.String(), "challenge") {
-		return nil, fmt.Errorf("VK captcha required - open %s in browser and solve it", resp.Request.URL.String())
-	}
 	return io.ReadAll(resp.Body)
 }
 
@@ -497,7 +483,7 @@ func (b *Bridge) connectVKWs(wtURL string) error {
 	if err != nil || len(ips) == 0 {
 		return fmt.Errorf("resolve %s: %w", host, err)
 	}
-	sfu, err := wtsignal.Dial(wtURL, host, ips[0])
+	sfu, err := wtsignal.Dial(wtURL, host, ips[0], vkOrigin)
 	if err != nil {
 		return err
 	}
@@ -646,8 +632,10 @@ func main() {
 	upstreamUser := flag.String("upstream-user", "", "upstream SOCKS5 username")
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
 	debugFlag := flag.Bool("debug", false, "verbose debug logging")
+	allowPrivate := flag.Bool("allow-private-dst", false, "let the joiner reach private/internal addresses through this creator")
 	flag.Parse()
 	common.Debug = *debugFlag
+	common.AllowPrivateDst = *allowPrivate
 
 	var readBuf int
 	var maxDCBuf uint64
@@ -713,11 +701,13 @@ func main() {
 	if *vkLink != "" {
 		callInfo, err = joinExistingCall(cookieStr, *vkLink, cfg)
 		if err != nil {
+			common.EmitAuthErrorFor(err)
 			log.Fatalf("Failed to join existing call: %v", err)
 		}
 	} else {
 		callInfo, err = createAndJoinCall(cookieStr, *peerId, cfg)
 		if err != nil {
+			common.EmitAuthErrorFor(err)
 			log.Fatalf("Failed to create call: %v", err)
 		}
 	}

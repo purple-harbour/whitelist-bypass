@@ -50,10 +50,14 @@ Traffic goes through the platform's SFU, which is on the government whitelist. T
 - `headless/vk/` - Headless VK creator: creates or joins a call via the VK HTTP API, Pion DC/VP8 tunnel, no browser
 - `headless/telemost/` - Headless Telemost (Yandex) creator with the same model
 - `headless/wbstream/` - Headless WB Stream creator (LiveKit-backed, anonymous guest tokens)
+- `headless/dion/` - Headless DION creator with the same model
+- `headless/bitrix/` - Headless Bitrix creator (adaptive DC/VP8, guest join)
 - `headless/wbstream-joiner/` - Desktop WB Stream joiner (counterpart to the creator, used for tests and Linux clients)
 - `headless/telemost-joiner/` - Desktop Telemost joiner (counterpart to the creator, used for tests and Linux clients)
+- `headless/dion-joiner/` - Desktop DION joiner (counterpart to the creator, used for tests and Linux clients)
+- `headless/bitrix-joiner/` - Desktop Bitrix joiner (counterpart to the creator, used for tests and Linux clients)
 - `headless/vk-bot/` - Standalone VK Long Poll bot that spawns headless creators on demand and replies with the join link (server-side alternative to the Electron bot)
-- `headless/tests/` - End-to-end smoke tests for each platform
+- `headless/tests/` - Live end-to-end tests (creator + joiners over a real SFU); run same-host or in a Dockerized netns stand, see [headless/tests/README.md](headless/tests/README.md)
 - `android-app/` - Android joiner: VpnService + tun2socks + headless Pion (primary path); also retains a `WebView` fallback for the legacy browser flow
 - `ios-proxy-app/` - iOS joiner: SOCKS5 + headless Pion via the gomobile xcframework
 - `creator-app/` - Electron desktop creator app: GUI front-end that can run either the legacy browser path or spawn the headless Go binaries; suitable for both interactive use and deployments
@@ -84,6 +88,8 @@ Three forms are available; pick whichever fits the device:
 - **Linux desktop** - run a headless joiner; it exposes a SOCKS5 proxy on the given port for whatever you point at it. Useful for servers and Linux clients. Optional `--socks-user` / `--socks-pass` enable SOCKS5 username/password auth.
   - WB Stream: `headless-wbstream-joiner --room <link> --socks-port 1080 [--socks-user u --socks-pass p]`
   - Telemost: `headless-telemost-joiner --tm-link <link> --socks-port 1080 [--socks-user u --socks-pass p]`
+  - DION: `headless-dion-joiner --room <link> --socks-port 1080 [--socks-user u --socks-pass p]`
+  - Bitrix: `headless-bitrix-joiner --link <link> --socks-port 1080 [--socks-user u --socks-pass p]`
 
 The full step-by-step (Russian) covers each platform in detail: see [docs/SETUP.md](docs/SETUP.md).
 
@@ -111,20 +117,22 @@ The full step-by-step (Russian) covers each platform in detail: see [docs/SETUP.
 ./build-headless.sh    # Headless binaries only (current platform)
 ./build-cli.sh         # Per-arch zips of headless creators + joiners + vk-bot
 ./build-creator.sh     # Creator Electron app (all platforms)
-./build-ios.sh         # Go .xcframework for iOS
+./build-ios.sh proxy   # iOS proxy app, xcframework + unsigned IPA
+./build-ios.sh vpn     # iOS VPN app, xcframework + unsigned IPA
 ```
 
 ### iOS
 
-Requires Xcode and macOS.
+Requires Xcode and macOS. `build-ios.sh` takes one argument, `proxy` or `vpn`.
 
 ```sh
-./build-ios.sh
+./build-ios.sh proxy   # ios-proxy-app -> prebuilts/whitelist-bypass-proxy.ipa
+./build-ios.sh vpn     # ios-vpn-app   -> prebuilts/whitelist-bypass-vpn.ipa
 ```
 
-This builds `Mobile.xcframework` into `ios-proxy-app/`. Then open `ios-proxy-app/whitelist-bypass-proxy.xcodeproj` in Xcode, select your signing team in Signing & Capabilities, and build to device.
+The script builds `Mobile.xcframework` into the app directory, runs the app's `strip-signing.sh` to clear the developer team from the project, builds the app unsigned, and writes an unsigned IPA to `prebuilts/`.
 
-Before committing, run `ios-proxy-app/strip-signing.sh` to remove your Apple developer team ID from the project.
+To run on a device, open the matching `.xcodeproj` in Xcode, set your team and unique bundle identifiers in Signing & Capabilities, and build. The `vpn` variant requires the Network Extension capability on its bundle identifiers.
 
 Output in `prebuilts/`:
 
@@ -135,7 +143,8 @@ Output in `prebuilts/`:
 | `WhitelistBypass Creator-*-ia32.exe` | Windows x86 |
 | `WhitelistBypass Creator-*.AppImage` | Linux x64 |
 | `whitelist-bypass.apk` | Android |
-| `whitelist-bypass-proxy.ipa` | iOS, unsigned |
+| `whitelist-bypass-proxy.ipa` | iOS proxy app, unsigned |
+| `whitelist-bypass-vpn.ipa` | iOS VPN app, unsigned |
 | `headless-vk-creator-linux-x64` | Linux x64 |
 | `headless-vk-creator-linux-ia32` | Linux x86 |
 | `headless-telemost-creator-linux-x64` | Linux x64 |
@@ -165,16 +174,18 @@ Pure Go creators that create calls via API without a browser. No Electron, no JS
 ./build-headless.sh
 ```
 
-Eight binaries are produced - four creators, three Linux joiners, and the VK bot:
+Ten binaries are produced - five creators, four Linux joiners, and the VK bot:
 
 ```sh
 ./headless/vk/headless-vk-creator               --cookies cookies-vk.json
 ./headless/telemost/headless-telemost-creator   --cookies cookies-yandex.json
 ./headless/wbstream/headless-wbstream-creator   --cookies cookies-wbstream.json
 ./headless/dion/headless-dion-creator           --cookies cookies-dion.json
+./headless/bitrix/headless-bitrix-creator       --cookies cookies-bitrix.json
 ./headless/wbstream-joiner/headless-wbstream-joiner --room <link> --socks-port 1080
 ./headless/dion-joiner/headless-dion-joiner         --room <link> --socks-port 1080
 ./headless/telemost-joiner/headless-telemost-joiner --tm-link <link> --socks-port 1080
+./headless/bitrix-joiner/headless-bitrix-joiner     --link <link> --socks-port 1080
 ./headless/vk-bot/headless-vk-bot               --token <t> --group-id <g> --bins-dir <dir>
 ```
 
@@ -229,3 +240,9 @@ Mutually exclusive with the call-creation flags (`--peer-id` for VK; the others 
 ## License
 
 [MIT](LICENSE)
+
+## Donate
+
+- `0xd986b7576340d8d7b04f806dfd38a182b19edf50` - USDC (ERC20)
+- `TTEo4XXTB6CqhEiKpyoncfk3skEvoq3bCP` - USDT (TRC20)
+- `UQCZge2JzLmwNtI56p-ZxLuN2f7ZMCPGqO0XTt3wJ-cy8JaE` - USDT (TON)

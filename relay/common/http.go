@@ -2,14 +2,19 @@ package common
 
 import (
 	"encoding/json"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 )
 
-const UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+const bodySnippetLimit = 300
+
+func BodySnippet(body []byte) string {
+	if len(body) > bodySnippetLimit {
+		return string(body[:bodySnippetLimit]) + "..."
+	}
+	return string(body)
+}
 
 func LoadCookies(path string) string {
 	data, err := os.ReadFile(path)
@@ -28,6 +33,38 @@ func LoadCookies(path string) string {
 		parts[i] = c.Name + "=" + c.Value
 	}
 	return strings.Join(parts, "; ")
+}
+
+func UpdateCookieFile(path string, updates map[string]string) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	seen := make(map[string]bool, len(updates))
+	for _, c := range raw {
+		name, _ := c["name"].(string)
+		if v, ok := updates[name]; ok {
+			c["value"] = v
+			seen[name] = true
+		}
+	}
+	for name, v := range updates {
+		if !seen[name] {
+			raw = append(raw, map[string]any{"name": name, "value": v})
+		}
+	}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, out, 0o600)
 }
 
 func CookieValue(cookieHeader, name string) string {
@@ -58,15 +95,4 @@ func FilterCookies(cookieHeader string, allow []string) string {
 		}
 	}
 	return strings.Join(out, "; ")
-}
-
-func HttpGet(endpoint string) ([]byte, error) {
-	req, _ := http.NewRequest("GET", endpoint, nil)
-	req.Header.Set("User-Agent", UserAgent)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
 }

@@ -338,7 +338,7 @@ class MainActivity :
         thread {
             val started = System.nanoTime()
             val ok = try {
-                probeViaSocks5(host = "ya.ru", port = 443)
+                probeViaSocks5(host = "google.com", port = 443)
             } catch (_: Exception) {
                 false
             }
@@ -721,7 +721,7 @@ class MainActivity :
         mainFragment()?.onConnectedChanged(false)
 
         val headlessMode =
-            Prefs.headless || platform == CallPlatform.WBSTREAM || platform == CallPlatform.DION
+            Prefs.headless || platform == CallPlatform.WBSTREAM || platform == CallPlatform.DION || platform == CallPlatform.BITRIX
 
         if (headlessMode && platform != CallPlatform.VK) {
             setJoinOverlayVisible(false)

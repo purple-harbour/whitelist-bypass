@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pion/webrtc/v4"
+	"github.com/kulikov0/headless-client/webrtc"
 	"whitelist-bypass/relay/common"
 )
 
@@ -40,7 +40,7 @@ func RequestResolve(hostname string) (string, error) {
 
 type StatusEmitter struct{}
 
-func (StatusEmitter) EmitStatus(status string)  { common.EmitStatus(status) }
+func (StatusEmitter) EmitStatus(status string)   { common.EmitStatus(status) }
 func (StatusEmitter) EmitStatusError(msg string) { common.EmitStatusError(msg) }
 
 type PCConfigurer struct{}

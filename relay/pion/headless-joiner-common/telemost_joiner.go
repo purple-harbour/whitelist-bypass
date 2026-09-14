@@ -2,7 +2,6 @@ package joiner
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -14,8 +13,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
-	"github.com/pion/webrtc/v4"
+	"github.com/kulikov0/headless-client"
+	"github.com/kulikov0/headless-client/webrtc"
+	"github.com/kulikov0/headless-client/websocket"
 	"whitelist-bypass/relay/common"
 	tmapi "whitelist-bypass/relay/telemost"
 	"whitelist-bypass/relay/tunnel"
@@ -36,11 +36,11 @@ type TelemostHeadlessJoiner struct {
 	// joiner uses these to install /32 bypass routes before the
 	// candidate is added to Pion's PeerConnection.
 	OnRemoteCandidate func(target int, candidateOrSDP string)
-	ResolveFn      ResolveFunc
-	Status         StatusEmitter
-	PCConfig       PeerConnectionConfigurer
-	AddTracks      AddTunnelTracksFunc
-	ReadTrackFn    ReadTrackFunc
+	ResolveFn         ResolveFunc
+	Status            StatusEmitter
+	PCConfig          PeerConnectionConfigurer
+	AddTracks         AddTunnelTracksFunc
+	ReadTrackFn       ReadTrackFunc
 
 	joinLink    string
 	displayName string
@@ -64,6 +64,7 @@ type TelemostHeadlessJoiner struct {
 	vp8FPS      int
 	vp8Batch    int
 	reliable    bool
+	dualTrack   bool
 
 	httpClient *http.Client
 	instanceID string
@@ -84,11 +85,13 @@ type TelemostHeadlessJoiner struct {
 	configAck        configAckTracker
 	reconnectAttempt atomic.Int32
 
-	setSlotsKey     int
-	initBundleSent  bool
-	boundPeers      map[string]bool
-	unboundPeers    map[string]bool
-	boundMu         sync.Mutex
+	setSlotsKey      int
+	slotsMu          sync.Mutex
+	screenshareAsked bool
+	initBundleSent   bool
+	boundPeers       map[string]bool
+	unboundPeers     map[string]bool
+	boundMu          sync.Mutex
 }
 
 func NewTelemostHeadlessJoiner(logFn func(string, ...any), resolveFn ResolveFunc, status StatusEmitter, pcConfig PeerConnectionConfigurer, addTracks AddTunnelTracksFunc, readTrackFn ReadTrackFunc) *TelemostHeadlessJoiner {
@@ -111,6 +114,7 @@ func (j *TelemostHeadlessJoiner) RunWithParams(jsonParams string) {
 		VP8FPS      int    `json:"vp8Fps"`
 		VP8Batch    int    `json:"vp8Batch"`
 		Reliable    bool   `json:"reliable"`
+		DualTrack   bool   `json:"dualTrack"`
 	}
 	if err := json.Unmarshal([]byte(jsonParams), &params); err != nil {
 		j.logFn("telemost-joiner: failed to parse params: %v", err)
@@ -132,8 +136,9 @@ func (j *TelemostHeadlessJoiner) RunWithParams(jsonParams string) {
 	j.vp8FPS = params.VP8FPS
 	j.vp8Batch = params.VP8Batch
 	j.reliable = params.Reliable
-	j.logFn("telemost-joiner: link=%s name=%s vp8Fps=%d vp8Batch=%d localEpoch=0x%08x",
-		j.joinLink, j.displayName, params.VP8FPS, params.VP8Batch, obf.LocalEpoch())
+	j.dualTrack = params.DualTrack
+	j.logFn("telemost-joiner: link=%s name=%s vp8Fps=%d vp8Batch=%d dualTrack=%v localEpoch=0x%08x",
+		j.joinLink, j.displayName, params.VP8FPS, params.VP8Batch, j.dualTrack, obf.LocalEpoch())
 
 	j.Status.EmitStatus(common.StatusConnecting)
 	if err := j.runOnce(); err != nil {
@@ -224,20 +229,26 @@ func (j *TelemostHeadlessJoiner) isClosed() bool {
 	return j.closed
 }
 
+func (j *TelemostHeadlessJoiner) tlsOptions() headless.TLSOptions {
+	return headless.TLSOptions{
+		InsecureSkipVerify: true,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, _ := net.SplitHostPort(addr)
+			resolvedIP, err := j.ResolveFn(host)
+			if err != nil {
+				return nil, err
+			}
+			dialer := headless.ChromeDialer()
+			dialer.Timeout = 10 * time.Second
+			return dialer.DialContext(ctx, network, resolvedIP+":"+port)
+		},
+	}
+}
+
 func (j *TelemostHeadlessJoiner) makeHTTPClient() *http.Client {
 	return &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				host, port, _ := net.SplitHostPort(addr)
-				resolvedIP, err := j.ResolveFn(host)
-				if err != nil {
-					return nil, err
-				}
-				return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, resolvedIP+":"+port)
-			},
-		},
+		Timeout:   15 * time.Second,
+		Transport: headless.ChromeWindows.Transport(j.tlsOptions()),
 	}
 }
 
@@ -384,13 +395,13 @@ func (j *TelemostHeadlessJoiner) sendHello() {
 		"hello": map[string]interface{}{
 			"participantMeta":       map[string]interface{}{"name": j.displayName, "role": "SPEAKER", "description": "", "sendAudio": false, "sendVideo": true},
 			"participantAttributes": map[string]interface{}{"name": j.displayName, "role": "SPEAKER", "description": ""},
-			"sendAudio": false, "sendVideo": true, "sendSharing": false,
+			"sendAudio":             false, "sendVideo": true, "sendSharing": false,
 			"participantId": j.peerID, "roomId": j.roomID,
 			"serviceName": j.serviceName, "credentials": j.credentials,
-			"capabilitiesOffer": tmapi.CapabilitiesOffer,
-			"sdkInfo":             map[string]interface{}{"implementation": "browser", "version": "6.0.0", "userAgent": common.UserAgent, "hwConcurrency": 8},
+			"capabilitiesOffer":   tmapi.CapabilitiesOffer,
+			"sdkInfo":             map[string]interface{}{"implementation": "browser", "version": "6.0.0", "userAgent": headless.ChromeWindows.UserAgent(), "hwConcurrency": 8},
 			"sdkInitializationId": uuid.New().String(),
-			"disablePublisher": false, "disableSubscriber": false, "disableSubscriberAudio": false,
+			"disablePublisher":    false, "disableSubscriber": false, "disableSubscriberAudio": false,
 		},
 	})
 	j.logFn("telemost-joiner: -> hello")
@@ -410,18 +421,22 @@ func (j *TelemostHeadlessJoiner) sendICE(cand *webrtc.ICECandidate, target strin
 func (j *TelemostHeadlessJoiner) initPC() {
 	config := webrtc.Configuration{ICEServers: j.iceServers}
 
-	settingEngine := webrtc.SettingEngine{}
-	settingEngine.DetachDataChannels()
-	if j.PCConfig != nil {
-		j.PCConfig.ConfigureSettingEngine(&settingEngine)
+	newAPI := func() (*webrtc.API, error) {
+		return tmapi.NewAPI(func(settingEngine *webrtc.SettingEngine) {
+			settingEngine.DetachDataChannels()
+			if j.PCConfig != nil {
+				j.PCConfig.ConfigureSettingEngine(settingEngine)
+			}
+		})
 	}
-	api, err := tmapi.NewAPI(&settingEngine)
+
+	subAPI, err := newAPI()
 	if err != nil {
-		j.logFn("telemost-joiner: ERROR: create webrtc API: %v", err)
+		j.logFn("telemost-joiner: ERROR: create subscriber webrtc API: %v", err)
 		return
 	}
 
-	subPC, err := api.NewPeerConnection(config)
+	subPC, err := subAPI.NewPeerConnection(config)
 	if err != nil {
 		j.logFn("telemost-joiner: ERROR: create sub PC: %v", err)
 		return
@@ -452,7 +467,13 @@ func (j *TelemostHeadlessJoiner) initPC() {
 		}, j.logFn, "telemost-joiner")
 	})
 
-	pubPC, err := api.NewPeerConnection(config)
+	pubAPI, err := newAPI()
+	if err != nil {
+		j.logFn("telemost-joiner: ERROR: create publisher webrtc API: %v", err)
+		return
+	}
+
+	pubPC, err := pubAPI.NewPeerConnection(config)
 	if err != nil {
 		j.logFn("telemost-joiner: ERROR: create pub PC: %v", err)
 		return
@@ -489,9 +510,13 @@ func (j *TelemostHeadlessJoiner) initPC() {
 				j.logFn("telemost-joiner: per-track kcp reliability active over video tunnel")
 			}
 			if !j.configAck.acknowledged() {
+				trackCount := 1
+				if j.dualTrack {
+					trackCount = 2
+				}
 				acked, cancel := j.configAck.arm()
 				go sendVP8ConfigUntilAcked(acked, cancel, j.stopCh, active,
-					vp8tun.FPS(), vp8tun.Batch(), 1, j.logFn, "telemost-joiner")
+					vp8tun.FPS(), vp8tun.Batch(), trackCount, j.logFn, "telemost-joiner")
 				j.logFn("telemost-joiner: pushed vp8 config to creator fps=%d batch=%d", vp8tun.FPS(), vp8tun.Batch())
 			}
 			if j.OnConnected != nil {
@@ -569,10 +594,29 @@ func (j *TelemostHeadlessJoiner) sendInitBundle() {
 	j.sendStartupSlotsRamp()
 }
 
-func (j *TelemostHeadlessJoiner) requestVideoSlots() {
+func (j *TelemostHeadlessJoiner) nextSlotsKey() int {
+	j.slotsMu.Lock()
+	defer j.slotsMu.Unlock()
 	j.setSlotsKey++
-	j.logFn("telemost-joiner: -> setSlots key=%d", j.setSlotsKey)
-	j.wsSend(tmapi.SetSlotsMessage(j.setSlotsKey))
+	return j.setSlotsKey
+}
+
+func (j *TelemostHeadlessJoiner) requestVideoSlots() {
+	key := j.nextSlotsKey()
+	j.logFn("telemost-joiner: -> setSlots key=%d", key)
+	j.wsSend(tmapi.SetSlotsMessage(key))
+}
+
+func (j *TelemostHeadlessJoiner) pollScreenshareSlots() {
+	for i := 0; i < 8; i++ {
+		select {
+		case <-j.stopCh:
+			return
+		case <-time.After(3 * time.Second):
+		}
+		j.logFn("telemost-joiner: -> setSlots re-request %d to bind screenshare", i+1)
+		j.requestVideoSlots()
+	}
 }
 
 func (j *TelemostHeadlessJoiner) forceReconnect(reason string) {
@@ -597,9 +641,12 @@ func (j *TelemostHeadlessJoiner) forceReconnect(reason string) {
 
 func (j *TelemostHeadlessJoiner) sendStartupSlotsRamp() {
 	for i := 0; i < 4; i++ {
-		j.setSlotsKey++
-		j.logFn("telemost-joiner: -> setSlots key=%d (startup %d/4)", j.setSlotsKey, i+1)
-		j.wsSend(tmapi.StartupSetSlotsMessage(i, j.setSlotsKey))
+		key := j.nextSlotsKey()
+		j.logFn("telemost-joiner: -> setSlots key=%d (startup %d/4)", key, i+1)
+		j.wsSend(tmapi.StartupSetSlotsMessage(i, key))
+	}
+	if j.dualTrack {
+		go j.pollScreenshareSlots()
 	}
 }
 
@@ -763,6 +810,24 @@ func (j *TelemostHeadlessJoiner) handleMessage(raw []byte) {
 		if common.Debug {
 			j.logFn("telemost-joiner: <- slotsConfig %s", tmapi.BriefJSON(sc))
 		}
+		if j.dualTrack {
+			unboundScreenshare := false
+			for _, ev := range tmapi.ScreenShareBindings(sc) {
+				pid := ev.ParticipantID
+				if len(pid) > 8 {
+					pid = pid[:8]
+				}
+				j.logFn("telemost-joiner: [screenshare] slot=%d pid=%s mid=%q reason=%q", ev.Slot, pid, ev.Mid, ev.Reason)
+				if ev.Mid == "" {
+					unboundScreenshare = true
+				}
+			}
+			if unboundScreenshare && !j.screenshareAsked {
+				j.screenshareAsked = true
+				j.logFn("telemost-joiner: [screenshare] advertised with empty mid, re-requesting sized slots once")
+				j.requestVideoSlots()
+			}
+		}
 		needRebind := false
 		presentPids := make(map[string]bool)
 		for _, ev := range tmapi.SlotsConfigBindings(sc) {
@@ -909,20 +974,23 @@ func (j *TelemostHeadlessJoiner) connectAndRun() {
 	}
 	j.logFn("telemost-joiner: resolved %s -> %s", common.MaskAddr(hostname), common.MaskAddr(resolvedIP))
 
-	wsHeader := http.Header{}
-	wsHeader.Set("User-Agent", common.UserAgent)
+	wsHeader := headless.ChromeWindows.Headers(headless.DestWebSocket)
 	wsHeader.Set("Origin", TmOrigin)
 
 	j.logFn("telemost-joiner: connecting to %s", j.mediaURL)
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-		WriteBufferSize:  65536,
-		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true, ServerName: hostname},
-		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := headless.ChromeWindows.WebSocketDialer(headless.TLSOptions{
+		ServerName:         hostname,
+		InsecureSkipVerify: true,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			_, port, _ := net.SplitHostPort(addr)
-			return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, resolvedIP+":"+port)
+			dialer := headless.ChromeDialer()
+			dialer.Timeout = 10 * time.Second
+			return dialer.DialContext(ctx, network, resolvedIP+":"+port)
 		},
-	}
+	})
+	dialer.HandshakeTimeout = 10 * time.Second
+	dialer.WriteBufferSize = 65536
+
 	ws, _, err := dialer.Dial(j.mediaURL, wsHeader)
 	if err != nil {
 		j.logFn("telemost-joiner: ERROR: ws connect: %s", common.MaskError(err))

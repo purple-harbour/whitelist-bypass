@@ -12,9 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"whitelist-bypass/relay/common"
+	headless "github.com/kulikov0/headless-client"
 )
-
 
 type vkConfig struct {
 	AppID           string `json:"appID"`
@@ -33,24 +32,25 @@ type vkCaptchaError struct {
 }
 
 func RunVKAuth(joinLink string, displayName string, logFn func(string, ...any), statusFn func(string), cache CacheStore, resolveFn ResolveFunc) (string, error) {
-	transport := &http.Transport{}
+	tlsOptions := headless.TLSOptions{}
 	if resolveFn != nil {
-		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		tlsOptions.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, _ := net.SplitHostPort(addr)
 			resolvedIP, err := resolveFn(host)
 			if err != nil {
 				return nil, err
 			}
-			return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, resolvedIP+":"+port)
+			dialer := headless.ChromeDialer()
+			dialer.Timeout = 10 * time.Second
+			return dialer.DialContext(ctx, network, resolvedIP+":"+port)
 		}
 	}
-	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
-
+	client := &http.Client{Timeout: 60 * time.Second, Transport: headless.ChromeWindows.Transport(tlsOptions)}
 
 	httpPost := func(targetURL string, form url.Values, extraHeaders map[string]string) (map[string]interface{}, error) {
 		req, _ := http.NewRequest("POST", targetURL, strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("User-Agent", common.UserAgent)
+		req.Header.Set("User-Agent", headless.ChromeWindows.UserAgent())
 		req.Header.Set("Origin", "https://vk.ru")
 		req.Header.Set("Referer", "https://vk.ru/")
 		for k, v := range extraHeaders {
@@ -185,15 +185,15 @@ func RunVKAuth(joinLink string, displayName string, logFn func(string, ...any), 
 					captchaAttempt = "1"
 				}
 				callParams = url.Values{
-					"v":               {cfg.ApiVersion},
-					"vk_join_link":    {joinLink},
-					"name":            {displayName},
-					"captcha_key":     {""},
-					"captcha_sid":     {captchaErr.captchaSid},
+					"v":                {cfg.ApiVersion},
+					"vk_join_link":     {joinLink},
+					"name":             {displayName},
+					"captcha_key":      {""},
+					"captcha_sid":      {captchaErr.captchaSid},
 					"is_sound_captcha": {"0"},
-					"success_token":   {successToken},
-					"captcha_ts":      {captchaErr.captchaTs},
-					"captcha_attempt": {captchaAttempt},
+					"success_token":    {successToken},
+					"captcha_ts":       {captchaErr.captchaTs},
+					"captcha_attempt":  {captchaAttempt},
 				}
 				continue
 			}

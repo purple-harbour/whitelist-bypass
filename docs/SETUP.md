@@ -41,9 +41,9 @@
 6. Создайте звонок
 7. Скопируйте ссылку на звонок и отправьте на Joiner
 
-**Headless режим** - создание звонка без браузера. Кнопки **VK** / **Telemost** / **WBStream** / **DION** в панели вкладки. При первом запуске приложение само откроет окно логина нужной платформы.
+**Headless режим** - создание звонка без браузера. Кнопки **VK** / **Telemost** / **WBStream** / **DION** / **Bitrix** в панели вкладки. При первом запуске приложение само откроет окно логина нужной платформы.
 
-Если нужно запустить headless на сервере без GUI - нажмите **Export Cookies**, получите `cookies.zip` со всеми четырьмя файлами и используйте их с headless бинарниками.
+Если нужно запустить headless на сервере без GUI - нажмите **Export Cookies**, получите `cookies.zip` со всеми пятью файлами и используйте их с headless бинарниками.
 
 > Запуск десктопного Creator на VPS без графического окружения через XPRA - см. [docs/vps/SETUP.md](vps/SETUP.md).
 
@@ -53,16 +53,20 @@
 
 ### Подготовка кук
 
-Куки нужны для авторизации на платформе, их требуют все четыре. Экспортируйте их из десктопного Creator:
+Куки нужны для авторизации на платформе, их требуют все пять. Экспортируйте их из десктопного Creator:
 
 1. Откройте Creator на десктопе
 2. Авторизуйтесь в нужных платформах - проще всего один раз запустить headless-вкладку каждой, приложение само попросит логин
-3. Нажмите **Export Cookies** - получится `cookies.zip` с файлами `cookies-vk.json`, `cookies-yandex.json`, `cookies-wbstream.json`, `cookies-dion.json`
+3. Нажмите **Export Cookies** - получится `cookies.zip` с файлами `cookies-vk.json`, `cookies-yandex.json`, `cookies-wbstream.json`, `cookies-dion.json`, `cookies-bitrix.json`
 4. Распакуйте и скопируйте нужные файлы на сервер
+
+`cookies-dion.json`, `cookies-bitrix.json` и `cookies-wbstream.json` creator перезаписывает на ходу, когда обновляет токен или перелогинивается - эти три файла должны быть доступны процессу на запись. VK и Telemost только читаются.
+
+> **Bitrix:** портал, зарегистрированный на `gmail.com`, падает при создании звонка с `403 invalid signature`. Заводите портал на другой почте: проверены `mail.ru` и `onetimemail.com.au`.
 
 ### DION: логин по паролю
 
-У DION refresh-токен одноразовый: при каждом обновлении сервер выдаёт новый и убивает старый. Поэтому `cookies-dion.json` живёт иначе, чем остальные три файла - процесс сам перезаписывает его при каждом обновлении токена. Из этого следуют два правила:
+У DION refresh-токен одноразовый: при каждом обновлении сервер выдаёт новый и убивает старый, а процесс сразу перезаписывает `cookies-dion.json`. Из этого следуют два правила:
 
 - файл должен быть доступен процессу на запись, и его нельзя подменять старой копией;
 - одна копия файла - один процесс. Если запустить тот же файл локально и на сервере, две копии будут убивать цепочку друг другу.
@@ -81,6 +85,21 @@
 
 Старый формат - голый массив `[{"name": "...", "value": "..."}]` - по-прежнему читается.
 
+### Bitrix: логин по паролю
+
+В `cookies-bitrix.json` кроме кук лежат адрес портала и учётка:
+
+```json
+{
+  "portal": "https://b24-xxxxxx.bitrix24.ru",
+  "email": "you@example.com",
+  "password": "secret",
+  "cookies": []
+}
+```
+
+`portal` обязателен. Когда сессия умирает, creator логинится сам через `auth2.bitrix24.net` и перезаписывает файл новыми куками.
+
 ### Запуск
 
 ```sh
@@ -95,6 +114,9 @@
 
 # DION
 ./headless-dion-creator --cookies cookies-dion.json
+
+# Bitrix
+./headless-bitrix-creator --cookies cookies-bitrix.json
 ```
 
 После запуска Creator создаст звонок и выведет ссылку в лог. Ссылку нужно передать на Joiner.
@@ -108,29 +130,31 @@
 ./headless-telemost-creator --cookies cookies-yandex.json --tm-link https://telemost.yandex.ru/j/<id>
 ./headless-wbstream-creator --cookies cookies-wbstream.json --room wbstream://<uuid>
 ./headless-dion-creator     --cookies cookies-dion.json    --room dion://<id>
+./headless-bitrix-creator   --cookies cookies-bitrix.json --room https://<portal>.bitrix24.ru/video/<alias>
 ```
 
 ### Флаги
 
-| Флаг | VK | TM | WB | DION | Описание |
-|---|---|---|---|---|---|
-| `--cookies <path>` | да | да | да | да | Путь к файлу с куками (JSON) |
-| `--cookie-string <str>` | да | да | - | - | Куки строкой (`name=val; name=val`) |
-| `--peer-id <id>` | да | - | - | - | VK peer_id для нового звонка |
-| `--vk-link <link>` | да | - | - | - | Подключиться к существующему VK звонку |
-| `--tm-link <uri>` | - | да | - | - | Подключиться к существующей Telemost конференции |
-| `--room <id>` | - | - | да | да | Подключиться к существующей комнате: `wbstream://<id>` для WB, `dion://<id>` для DION |
-| `--name <name>` | - | - | да | да | Отображаемое имя в комнате |
-| `--resources <mode>` | да | да | да | да | `default` / `moderate` / `unlimited` / `custom`; у DION без `custom` |
-| `--read-buf <bytes>` | да | да | да | - | Размер read-буфера, только с `--resources custom` |
-| `--max-dc-buf <bytes>` | да | - | - | - | Порог `BufferedAmountLowThreshold` DC, только с `--resources custom` |
-| `--mem-limit <bytes>` | да | да | да | - | Soft memory limit Go рантайма, только с `--resources custom` |
-| `--write-file <path>` | да | да | да | да | Файл, куда записывается активная ссылка на звонок |
-| `--upstream-socks <host:port>` | да | да | да | да | Гнать трафик joiner-а через локальный SOCKS5 прокси, например VPN-клиент |
-| `--upstream-user <user>` | да | да | да | да | Логин для upstream SOCKS5 |
-| `--upstream-pass <pass>` | да | да | да | да | Пароль для upstream SOCKS5 |
-| `--debug` | да | да | да | да | Подробные логи |
-| `--version` | да | да | да | да | Вывести версию и выйти |
+| Флаг | VK | TM | WB | DION | BX | Описание |
+|---|---|---|---|---|---|---|
+| `--cookies <path>` | да | да | да | да | да | Путь к файлу с куками (JSON) |
+| `--cookie-string <str>` | да | да | - | - | - | Куки строкой (`name=val; name=val`) |
+| `--peer-id <id>` | да | - | - | - | - | VK peer_id для нового звонка |
+| `--vk-link <link>` | да | - | - | - | - | Подключиться к существующему VK звонку |
+| `--tm-link <uri>` | - | да | - | - | - | Подключиться к существующей Telemost конференции |
+| `--room <id>` | - | - | да | да | да | Подключиться к существующей комнате: `wbstream://<id>` для WB, `dion://<id>` для DION, ссылка `https://<portal>/video/<alias>` или один алиас для Bitrix |
+| `--name <name>` | - | - | да | да | - | Отображаемое имя в комнате |
+| `--resources <mode>` | да | да | да | да | да | `default` / `moderate` / `unlimited` / `custom`; у DION без `custom` |
+| `--read-buf <bytes>` | да | да | да | - | да | Размер read-буфера, только с `--resources custom` |
+| `--max-dc-buf <bytes>` | да | - | - | - | - | Порог `BufferedAmountLowThreshold` DC, только с `--resources custom` |
+| `--mem-limit <bytes>` | да | да | да | - | - | Soft memory limit Go рантайма, только с `--resources custom` |
+| `--write-file <path>` | да | да | да | да | да | Файл, куда записывается активная ссылка на звонок |
+| `--upstream-socks <host:port>` | да | да | да | да | да | Гнать трафик joiner-а через локальный SOCKS5 прокси, например VPN-клиент |
+| `--upstream-user <user>` | да | да | да | да | да | Логин для upstream SOCKS5 |
+| `--upstream-pass <pass>` | да | да | да | да | да | Пароль для upstream SOCKS5 |
+| `--allow-private-dst` | да | да | да | да | да | Разрешить joiner-у ходить в локальную сеть creator-а (по умолчанию такие адреса блокируются) |
+| `--debug` | да | да | да | да | да | Подробные логи |
+| `--version` | да | да | да | да | да | Вывести версию и выйти |
 
 ### Выходной трафик через свой VPS
 
@@ -218,6 +242,8 @@ SOCKS5-инбаунд VPN-клиента должен поддерживать U
 - `/vk headless` - звонок VK, headless режим
 - `/tm headless` - звонок Telemost, headless режим
 - `/wb headless` - комната WB Stream
+- `/dion` - звонок DION
+- `/bitrix` - звонок Bitrix
 - `/list` - список активных вкладок
 - `/close <id>` - закрыть вкладку по ID
 
@@ -242,9 +268,10 @@ Standalone Go-бинарник `headless-vk-bot` - то же самое, что 
    - `headless-telemost-creator-linux-x64`
    - `headless-wbstream-creator-linux-x64`
    - `headless-dion-creator-linux-x64`
+   - `headless-bitrix-creator-linux-x64`
 
    Не забудьте дать права на выполнение: `chmod +x /usr/local/bin/headless-*`.
-3. Подготовьте куки - все четыре платформы требуют залогиненную сессию. В десктопном Creator нажмите **Export Cookies** - получите `cookies.zip` со всеми четырьмя файлами (`cookies-vk.json`, `cookies-yandex.json`, `cookies-wbstream.json`, `cookies-dion.json`).
+3. Подготовьте куки - все пять платформ требуют залогиненную сессию. В десктопном Creator нажмите **Export Cookies** - получите `cookies.zip` со всеми пятью файлами (`cookies-vk.json`, `cookies-yandex.json`, `cookies-wbstream.json`, `cookies-dion.json`, `cookies-bitrix.json`).
 4. Распакуйте архив и скопируйте куки на сервер.
 
 ### Запуск
@@ -258,7 +285,8 @@ Standalone Go-бинарник `headless-vk-bot` - то же самое, что 
   --vk-cookies /etc/whitelist-bypass/cookies-vk.json \
   --tm-cookies /etc/whitelist-bypass/cookies-yandex.json \
   --wb-cookies /etc/whitelist-bypass/cookies-wbstream.json \
-  --dion-cookies /etc/whitelist-bypass/cookies-dion.json
+  --dion-cookies /etc/whitelist-bypass/cookies-dion.json \
+  --bitrix-cookies /etc/whitelist-bypass/cookies-bitrix.json
 ```
 
 ### Флаги
@@ -268,11 +296,12 @@ Standalone Go-бинарник `headless-vk-bot` - то же самое, что 
 | `--token <str>` | Community access token (обязательно) |
 | `--group-id <id>` | ID сообщества, только цифры (обязательно) |
 | `--user-id <ids>` | Список VK ID через запятую (`12345,67890`), которым разрешено отправлять команды. Пусто = разрешено всем (НЕ рекомендуется) |
-| `--bins-dir <dir>` | Папка, где лежат `headless-vk-creator` / `headless-telemost-creator` / `headless-wbstream-creator` / `headless-dion-creator` (обязательно) |
+| `--bins-dir <dir>` | Папка, где лежат `headless-vk-creator` / `headless-telemost-creator` / `headless-wbstream-creator` / `headless-dion-creator` / `headless-bitrix-creator` (обязательно) |
 | `--vk-cookies <path>` | Путь к VK куки (нужен для `/vk` и для join по VK call-ссылке) |
 | `--tm-cookies <path>` | Путь к Yandex куки (нужен для `/tm` и для join по Telemost-ссылке) |
 | `--wb-cookies <path>` | Путь к WB Stream куки (нужен для `/wb` и для join по `wbstream://` / `stream.wb.ru` ссылке) |
 | `--dion-cookies <path>` | Путь к DION куки (нужен для `/dion` и для join по `dion://` / `dion.vc` ссылке) |
+| `--bitrix-cookies <path>` | Путь к Bitrix куки (нужен для `/bitrix` и для join по ссылке `bitrix24` + `/video/`) |
 | `--sessions-dir <dir>` | Папка для логов запущенных creators. Опционально - без флага логи не пишутся, stdout/stderr creators отбрасываются |
 | `--resources <mode>` | Режим ресурсов, передаётся каждому запускаемому creator: `default` / `moderate` / `unlimited`. По умолчанию `default`. `custom` не поддерживается, так как у каждого бинарника свой набор флагов настройки |
 | `--version` | Вывести версию и выйти |
@@ -300,7 +329,8 @@ ExecStart=/usr/local/bin/headless-vk-bot \
   --vk-cookies /etc/whitelist-bypass/cookies-vk.json \
   --tm-cookies /etc/whitelist-bypass/cookies-yandex.json \
   --wb-cookies /etc/whitelist-bypass/cookies-wbstream.json \
-  --dion-cookies /etc/whitelist-bypass/cookies-dion.json
+  --dion-cookies /etc/whitelist-bypass/cookies-dion.json \
+  --bitrix-cookies /etc/whitelist-bypass/cookies-bitrix.json
 Restart=always
 RestartSec=5
 User=wlb
@@ -321,16 +351,16 @@ sudo journalctl -u wlb-vk-bot -f
 
 ### Запуск через Docker
 
-Альтернатива systemd. Готовый образ публикуется в GHCR (`ghcr.io/kulikov0/whitelist-bypass-bot`) - под капотом тот же `headless-vk-bot` плюс четыре creator-бинарника. Поддерживаемые архитектуры: `linux/amd64`, `linux/arm64`, `linux/386`.
+Альтернатива systemd. Готовый образ публикуется в GHCR (`ghcr.io/kulikov0/whitelist-bypass-bot`) - под капотом тот же `headless-vk-bot` плюс пять creator-бинарников. Поддерживаемые архитектуры: `linux/amd64`, `linux/arm64`, `linux/386`.
 
 ```sh
 mkdir wlb-bot && cd wlb-bot
 curl -O https://raw.githubusercontent.com/kulikov0/whitelist-bypass/main/headless/docker/docker-compose.yml
 curl -L https://raw.githubusercontent.com/kulikov0/whitelist-bypass/main/headless/docker/.env.example -o .env
 # отредактируйте .env: VK_TOKEN, VK_GROUP_ID, VK_USER_IDS
-# положите рядом cookies-vk.json, cookies-yandex.json, cookies-wbstream.json, cookies-dion.json
+# положите рядом cookies-vk.json, cookies-yandex.json, cookies-wbstream.json, cookies-dion.json, cookies-bitrix.json
 # (для платформ, которые не используете - создайте файл с содержимым `[]`)
-sudo chown 999:999 cookies-dion.json
+sudo chown 999:999 cookies-dion.json cookies-bitrix.json cookies-wbstream.json
 docker compose up -d
 docker compose logs -f
 ```
@@ -353,11 +383,12 @@ docker compose pull && docker compose up -d
 | `TM_COOKIES` | нет | `/data/cookies-yandex.json` если есть | `--tm-cookies` |
 | `WB_COOKIES` | нет | `/data/cookies-wbstream.json` если есть | `--wb-cookies` |
 | `DION_COOKIES` | нет | `/data/cookies-dion.json` если есть | `--dion-cookies` |
+| `BITRIX_COOKIES` | нет | `/data/cookies-bitrix.json` если есть | `--bitrix-cookies` |
 | `UPSTREAM_SOCKS` | нет | - | `--upstream-socks` |
 | `UPSTREAM_USER` | нет | - | `--upstream-user` |
 | `UPSTREAM_PASS` | нет | - | `--upstream-pass` |
 
-> `cookies-dion.json` монтируется без `:ro`, в отличие от остальных трёх: DION выдаёт одноразовый refresh-токен, и creator перезаписывает файл при каждом обновлении. Контейнер работает под uid 999, поэтому файл на хосте должен принадлежать этому uid - иначе `/dion` упадёт с `save cookies failed: ... permission denied`. VK, Telemost и WB Stream куки только читают, их менять не нужно.
+> `cookies-dion.json`, `cookies-bitrix.json` и `cookies-wbstream.json` монтируются без `:ro` - creator перезаписывает их при обновлении токена, поэтому на хосте они должны принадлежать uid 999 (иначе `save cookies failed: permission denied`). VK и Telemost только читаются.
 
 > Если WebRTC-туннель не доходит через сетевой бридж Docker (UDP может отбрасываться), добавьте в `docker-compose.yml` строку `network_mode: host` под сервисом `bot`.
 
@@ -369,6 +400,7 @@ docker compose pull && docker compose up -d
 - `/tm` - запустить `headless-telemost-creator`
 - `/wb` - запустить `headless-wbstream-creator`
 - `/dion` - запустить `headless-dion-creator`
+- `/bitrix` - запустить `headless-bitrix-creator`
 - `/list` - список активных сессий
 - `/close <id>` - закрыть сессию по короткому ID
 - `/start` - показать главное меню
@@ -569,3 +601,4 @@ sudo tun2socks -device tun://wb0 -proxy socks5://127.0.0.1:1080
 
 - `0xd986b7576340d8d7b04f806dfd38a182b19edf50` - USDC (ERC20)
 - `TTEo4XXTB6CqhEiKpyoncfk3skEvoq3bCP` - USDT (TRC20)
+- `UQCZge2JzLmwNtI56p-ZxLuN2f7ZMCPGqO0XTt3wJ-cy8JaE` - USDT (TON)

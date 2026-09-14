@@ -7,6 +7,7 @@ export enum TunnelMode {
   HeadlessTelemost = 'headless-telemost',
   HeadlessWBStream = 'headless-wbstream',
   HeadlessDion = 'headless-dion',
+  HeadlessBitrix = 'headless-bitrix',
 }
 
 export enum Platform {
@@ -14,6 +15,7 @@ export enum Platform {
   Telemost = 'telemost',
   WBStream = 'wbstream',
   Dion = 'dion',
+  Bitrix = 'bitrix',
 }
 
 export enum RelayMode {
@@ -32,6 +34,7 @@ export enum BotCommand {
   TM = 'tm',
   WB = 'wb',
   Dion = 'dion',
+  Bitrix = 'bitrix',
   JoinPrompt = 'join-prompt',
   List = 'list',
   Menu = 'menu',
@@ -87,6 +90,12 @@ export interface DionCredentials {
   password: string;
 }
 
+export interface BitrixCredentials {
+  portal: string;
+  email: string;
+  password: string;
+}
+
 export interface TabConfig {
   mode: TunnelMode;
   peerId: number;
@@ -106,6 +115,13 @@ export interface CallInfo {
   joinLink?: string;
   turn?: string;
   protocol?: string;
+}
+
+export interface SavedCall {
+  platform: Platform;
+  target: string;
+  name: string;
+  savedAt: number;
 }
 
 export enum HeadlessMode {
@@ -171,6 +187,8 @@ export interface Bridge {
   clearCookies(platform: string): Promise<number>;
   getDionCredentials(): Promise<DionCredentials>;
   setDionCredentials(email: string, password: string): Promise<void>;
+  getBitrixCredentials(): Promise<BitrixCredentials>;
+  setBitrixCredentials(portal: string, email: string, password: string): Promise<void>;
   onCreateBotTab(cb: (data: BotTabData) => void): void;
   getCallCreatorCode(scriptFile: string): Promise<string>;
   onBotError(cb: (msg: string) => void): void;

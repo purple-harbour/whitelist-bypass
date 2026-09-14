@@ -26,8 +26,10 @@ func main() {
 	upstreamUser := flag.String("upstream-user", "", "upstream SOCKS5 username")
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
 	debugFlag := flag.Bool("debug", false, "verbose debug logging")
+	allowPrivate := flag.Bool("allow-private-dst", false, "let the joiner reach private/internal addresses through this creator")
 	flag.Parse()
 	common.Debug = *debugFlag
+	common.AllowPrivateDst = *allowPrivate
 
 	var readBuf int
 	var memLimit int64
@@ -67,14 +69,29 @@ func main() {
 		log.Fatalf("[auth] cookies file is missing __wb_device_id; re-export via creator-app's 'Export Cookies' button")
 	}
 	cookieHeader := common.FilterCookies(rawCookies, wbstream.WBStreamCookieAllowlist)
-	bearer, err := wbstream.RefreshAccessToken(nil, cookieHeader, deviceID)
+	persistCookies := func(rotated map[string]string) {
+		if len(rotated) == 0 {
+			return
+		}
+		if werr := common.UpdateCookieFile(*cookiesPath, rotated); werr != nil {
+			log.Printf("[auth] warn: persist rotated cookies: %v", werr)
+			return
+		}
+		rawCookies = common.LoadCookies(*cookiesPath)
+		cookieHeader = common.FilterCookies(rawCookies, wbstream.WBStreamCookieAllowlist)
+		log.Printf("[auth] persisted %d rotated cookie(s)", len(rotated))
+	}
+	bearer, rotated, err := wbstream.RefreshAccessToken(nil, cookieHeader, deviceID)
 	if err != nil {
+		common.EmitAuthErrorFor(err)
 		log.Fatalf("[auth] slide-v3 refresh: %v", err)
 	}
+	persistCookies(rotated)
 	log.Printf("[auth] bearer refreshed (len=%d)", len(bearer))
 	requestedRoom := wbstream.ParseRoomID(*roomFlag)
 	roomID, roomToken, accessToken, serverURL, err := wbstream.AuthAsLoggedIn(nil, cookieHeader, bearer, requestedRoom, *displayName)
 	if err != nil {
+		common.EmitAuthErrorFor(err)
 		log.Fatalf("[auth] %v", err)
 	}
 	log.Printf("[auth] room=%s server=%s", roomID, serverURL)
@@ -159,13 +176,14 @@ func main() {
 		}
 		time.Sleep(3 * time.Second)
 
-		newBearer, refreshErr := wbstream.RefreshAccessToken(nil, cookieHeader, deviceID)
+		newBearer, rotated, refreshErr := wbstream.RefreshAccessToken(nil, cookieHeader, deviceID)
 		if refreshErr != nil {
 			log.Printf("[rejoin] slide-v3 refresh failed: %v, retrying in 5s", refreshErr)
 			time.Sleep(5 * time.Second)
 			continue
 		}
 		bearer = newBearer
+		persistCookies(rotated)
 		_, newRoomToken, newAccessToken, newServerURL, err := wbstream.AuthAsLoggedIn(nil, cookieHeader, bearer, roomID, *displayName)
 		if err != nil {
 			log.Printf("[rejoin] auth failed: %v, retrying in 5s", err)
