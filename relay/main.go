@@ -13,6 +13,7 @@ import (
 	"whitelist-bypass/relay/pion"
 	"whitelist-bypass/relay/pion/android"
 	"whitelist-bypass/relay/tunnel"
+	"whitelist-bypass/relay/tunnel/rtc"
 )
 
 type stdLogger struct{}
@@ -78,7 +79,7 @@ func main() {
 		return func(tun tunnel.DataTunnel) {
 			readBuf := common.VP8BufSize
 			switch tun.(type) {
-			case *tunnel.DCTunnel, *tunnel.MultiTrackKCPTunnel:
+			case *rtc.DCTunnel, *rtc.MultiTrackKCPTunnel:
 				readBuf = common.DCBufSize
 			}
 			bridgeMu.Lock()
@@ -110,7 +111,7 @@ func main() {
 	case "dc-joiner":
 		log.Fatal(androidbind.StartJoiner(*wsPort, *socksPort, *socksHost, *socksUser, *socksPass, cb))
 	case "dc-creator":
-		log.Fatal(startDCCreator(*wsPort))
+		log.Fatal(startDCCreator(*wsPort, *upstreamSocks, *upstreamUser, *upstreamPass))
 	case "vk-video-joiner":
 		c := pion.NewVKClient(log.Printf)
 		c.OnConnected = joinerCallback

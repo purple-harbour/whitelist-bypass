@@ -157,6 +157,14 @@ export class TabManager {
     this.launcher.setDebugLogging(enabled);
   }
 
+  setAllowPrivateDst(enabled: boolean): void {
+    this.launcher.setAllowPrivateDst(enabled);
+  }
+
+  setAllowLoopbackDst(enabled: boolean): void {
+    this.launcher.setAllowLoopbackDst(enabled);
+  }
+
   startRelay(tabId: string, tab: TabState): void {
     this.launcher.startRelay(tabId, tab);
   }
@@ -231,7 +239,7 @@ export class TabManager {
     return this.cookies.buildCookiesZip();
   }
 
-  setWBStreamDeviceId(id: string): Promise<void> {
-    return this.cookies.setWBStreamDeviceId(id);
+  setWBStreamAccessToken(token: string): Promise<void> {
+    return this.cookies.setWBStreamAccessToken(token);
   }
 }

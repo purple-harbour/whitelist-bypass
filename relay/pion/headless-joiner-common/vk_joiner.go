@@ -14,12 +14,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kulikov0/headless-client"
-	"github.com/kulikov0/headless-client/webrtc"
 	"whitelist-bypass/relay/common"
 	"whitelist-bypass/relay/headlessapi"
 	"whitelist-bypass/relay/tunnel"
+	"whitelist-bypass/relay/tunnel/rtc"
 	"whitelist-bypass/relay/wtsignal"
+
+	"github.com/kulikov0/headless-client"
+	"github.com/kulikov0/headless-client/webrtc"
 )
 
 const vkMaxReconnectAttempts = 10
@@ -93,8 +95,8 @@ type VKHeadlessJoiner struct {
 	pc             *webrtc.PeerConnection
 	sampleTrack    *webrtc.TrackLocalStaticSample
 	dc             *webrtc.DataChannel
-	vp8tunnel      *tunnel.VP8DataTunnel
-	sym            *tunnel.SymmetricScreenTunnel
+	vp8tunnel      *rtc.VP8DataTunnel
+	sym            *rtc.SymmetricScreenTunnel
 	producerScreen screenUplink
 	obf            *tunnel.TunnelObfuscator
 	vp8FPS         int
@@ -555,11 +557,13 @@ func (h *VKHeadlessJoiner) handleConnection(msg map[string]interface{}) {
 func (h *VKHeadlessJoiner) initPC() {
 	var iceServers []webrtc.ICEServer
 	if len(h.joinResp.StunServer.URLs) > 0 {
-		iceServers = append(iceServers, webrtc.ICEServer{URLs: h.joinResp.StunServer.URLs})
+		iceServers = append(iceServers, webrtc.ICEServer{
+			URLs: common.ResolveICEHosts(h.joinResp.StunServer.URLs, h.ResolveFn, h.logFn, "vk-joiner"),
+		})
 	}
 	if len(h.joinResp.TurnServer.URLs) > 0 {
 		iceServers = append(iceServers, webrtc.ICEServer{
-			URLs:       h.joinResp.TurnServer.URLs,
+			URLs:       common.ResolveICEHosts(h.joinResp.TurnServer.URLs, h.ResolveFn, h.logFn, "vk-joiner"),
 			Username:   h.joinResp.TurnServer.Username,
 			Credential: h.joinResp.TurnServer.Credential,
 		})
@@ -614,7 +618,7 @@ func (h *VKHeadlessJoiner) initPC() {
 				h.logFn("vk-joiner: === DC TUNNEL CONNECTED ===")
 				h.Status.EmitStatus(common.StatusTunnelConnected)
 				if h.OnConnected != nil {
-					h.OnConnected(tunnel.NewDCTunnel(dc, h.obf, common.RTPBufSize, h.logFn))
+					h.OnConnected(rtc.NewDCTunnel(dc, h.obf, common.RTPBufSize, h.logFn))
 				}
 			}
 		})
@@ -639,15 +643,15 @@ func (h *VKHeadlessJoiner) initPC() {
 			h.reconnectAttempt.Store(0)
 			h.logFn("vk-joiner: === TUNNEL CONNECTED ===")
 			h.Status.EmitStatus(common.StatusTunnelConnected)
-			h.vp8tunnel = tunnel.NewVP8DataTunnel(h.sampleTrack, h.obf, h.logFn)
+			h.vp8tunnel = rtc.NewVP8DataTunnel(h.sampleTrack, h.obf, h.logFn)
 			h.vp8tunnel.Start(h.vp8FPS, h.vp8Batch)
 			var downlink tunnel.DataTunnel = h.vp8tunnel
 			trackCount := 1
 			if h.dualTrack {
-				writer := tunnel.NewScreenWriter(h.obf, "screen-up", h.logFn)
+				writer := rtc.NewScreenWriter(h.obf, "screen-up", h.logFn)
 				writer.Reconfigure(h.vp8tunnel.FPS(), h.vp8tunnel.Batch())
 				writer.SetSend(h.producerScreen.send)
-				h.sym = tunnel.NewSymmetricScreenTunnel(h.vp8tunnel, writer, h.obf, h.producerScreen.ready, h.logFn)
+				h.sym = rtc.NewSymmetricScreenTunnel(h.vp8tunnel, writer, h.obf, h.producerScreen.ready, h.logFn)
 				h.sym.SetTrackCount(2)
 				downlink = h.sym
 				trackCount = 2
@@ -656,7 +660,7 @@ func (h *VKHeadlessJoiner) initPC() {
 			vp8tun := h.vp8tunnel
 			if !h.configAck.acknowledged() {
 				acked, cancel := h.configAck.arm()
-				go sendVP8ConfigUntilAcked(acked, cancel, h.stopCh, vp8tun,
+				go tunnel.SendVP8ConfigUntilAcked(acked, cancel, h.stopCh, vp8tun,
 					vp8tun.FPS(), vp8tun.Batch(), trackCount, h.logFn, "vk-joiner")
 				h.logFn("vk-joiner: pushed vp8 config to creator fps=%d batch=%d trackCount=%d", vp8tun.FPS(), vp8tun.Batch(), trackCount)
 			}

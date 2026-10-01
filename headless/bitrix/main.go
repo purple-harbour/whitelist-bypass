@@ -12,10 +12,12 @@ import (
 	"sync"
 	"syscall"
 
-	headless "github.com/kulikov0/headless-client"
 	"whitelist-bypass/relay/bitrix"
 	"whitelist-bypass/relay/common"
 	"whitelist-bypass/relay/tunnel"
+	"whitelist-bypass/relay/tunnel/rtc"
+
+	headless "github.com/kulikov0/headless-client"
 )
 
 func main() {
@@ -30,9 +32,11 @@ func main() {
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
 	debugFlag := flag.Bool("debug", false, "verbose debug logging")
 	allowPrivate := flag.Bool("allow-private-dst", false, "let the joiner reach private/internal addresses through this creator")
+	allowLoopback := flag.Bool("allow-loopback", false, "let the joiner reach the creator's own loopback through this creator")
 	flag.Parse()
 	common.Debug = *debugFlag
 	common.AllowPrivateDst = *allowPrivate
+	common.AllowLoopbackDst = *allowLoopback
 
 	var readBuf int
 	var memLimit int64
@@ -204,7 +208,7 @@ func main() {
 		}
 		bridgeReadBuf := common.VP8BufSize
 		switch tun.(type) {
-		case *tunnel.DCTunnel, *tunnel.MultiTrackKCPTunnel:
+		case *rtc.DCTunnel, *rtc.MultiTrackKCPTunnel:
 			bridgeReadBuf = readBuf
 		}
 		activeBridge = tunnel.NewRelayBridge(tun, "creator", bridgeReadBuf, log.Printf)

@@ -16,11 +16,13 @@ import (
 	"sync"
 	"time"
 
-	headless "github.com/kulikov0/headless-client"
-	"github.com/kulikov0/headless-client/webrtc"
 	"whitelist-bypass/relay/common"
 	"whitelist-bypass/relay/tunnel"
+	"whitelist-bypass/relay/tunnel/rtc"
 	"whitelist-bypass/relay/wtsignal"
+
+	headless "github.com/kulikov0/headless-client"
+	"github.com/kulikov0/headless-client/webrtc"
 )
 
 const TopologyDirect = "DIRECT"
@@ -398,8 +400,9 @@ func (b *Bridge) handleVKMessage(raw []byte) {
 			log.Printf("[vk-ws]    Topology changed to %s", topo)
 			b.topology = topo
 			if topo != TopologyDirect {
-				b.bounceForServerTopology("SERVER topology")
-				return
+				// b.bounceForServerTopology("SERVER topology")
+				// return
+				b.failForServerTopology("SERVER topology")
 			}
 
 		case "participant-joined", "participant-added":
@@ -407,8 +410,9 @@ func (b *Bridge) handleVKMessage(raw []byte) {
 				b.peers[int64(pid)] = struct{}{}
 				log.Printf("[vk-ws]    Participant %d joined (total: %d)", int64(pid), len(b.peers))
 				if b.topology != TopologyDirect {
-					b.bounceForServerTopology("participant joined under SERVER")
-					return
+					// b.bounceForServerTopology("participant joined under SERVER")
+					// return
+					b.failForServerTopology("participant joined under SERVER")
 				}
 			}
 
@@ -505,6 +509,11 @@ func (b *Bridge) initRelay() {
 	b.p2p.Init()
 }
 
+func (b *Bridge) failForServerTopology(reason string) {
+	log.Fatalf("[vk-ws]    %s -> VK moved this call to server topology, it cannot be tunneled, create a new call and connect again", reason)
+}
+
+// unused, reconnecting no longer recovers DIRECT
 func (b *Bridge) bounceForServerTopology(reason string) {
 	b.mu.Lock()
 	if b.bouncing {
@@ -520,6 +529,10 @@ func (b *Bridge) bounceForServerTopology(reason string) {
 	suppress := b.suppressScreenshare
 	sfu := b.sfu
 	b.mu.Unlock()
+
+	// if alreadySuppressed {
+	// 	log.Fatalf("[vk-ws]    %s -> still SERVER after %d reconnects and screenshare suppression, this call runs through the VK server and cannot be tunneled, create a new call", reason, count)
+	// }
 
 	if suppress {
 		log.Printf("[vk-ws]    %s -> reconnect #%d, suppressing screenshare to settle single-track DIRECT", reason, count)
@@ -633,9 +646,11 @@ func main() {
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
 	debugFlag := flag.Bool("debug", false, "verbose debug logging")
 	allowPrivate := flag.Bool("allow-private-dst", false, "let the joiner reach private/internal addresses through this creator")
+	allowLoopback := flag.Bool("allow-loopback", false, "let the joiner reach the creator's own loopback through this creator")
 	flag.Parse()
 	common.Debug = *debugFlag
 	common.AllowPrivateDst = *allowPrivate
+	common.AllowLoopbackDst = *allowLoopback
 
 	var readBuf int
 	var maxDCBuf uint64
@@ -737,7 +752,7 @@ func main() {
 		ur.OnConnected = func(tun tunnel.DataTunnel) {
 			rb := tunnel.NewRelayBridge(tun, "creator", common.VP8BufSize, log.Printf)
 			rb.SetUpstreamSocks(*upstreamSocks, *upstreamUser, *upstreamPass)
-			if st, ok := tun.(*tunnel.SymmetricScreenTunnel); ok {
+			if st, ok := tun.(*rtc.SymmetricScreenTunnel); ok {
 				rb.SetOnPeerConfig(func(fps, batch, trackCount int) {
 					st.SetTrackCount(trackCount)
 					bridge.setScreenSharing(trackCount > 1)

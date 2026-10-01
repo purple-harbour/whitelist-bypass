@@ -8,12 +8,14 @@ FAIL_FAST="${FAIL_FAST:-1}"
 ABORT_RUN=0
 CHILD_PIDS=""
 JOINER_PIDS=""
+JOINER_FIFO=""
+RESOLVER_PID=""
 SINK_PID=""
 SINK_PORT=""
 SINK_FILE=""
 SINK_WRAP="${SINK_WRAP:-}"
-SINK_BIND="${SINK_BIND:-127.0.0.1}"
-SINK_TARGET="${SINK_TARGET:-127.0.0.1}"
+SINK_BIND="${SINK_BIND:-}"
+SINK_TARGET="${SINK_TARGET:-}"
 PROBE_HOST="${PROBE_HOST:-127.0.0.1}"
 PORT_CURSOR="${PORT_BASE:-21080}"
 
@@ -55,7 +57,19 @@ alloc_port() {
     PORT_CURSOR=$((PORT_CURSOR + 1))
 }
 
+host_ip() {
+    if command -v ip >/dev/null 2>&1; then
+        ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1
+    elif command -v ipconfig >/dev/null 2>&1; then
+        _iface=$(route -n get default 2>/dev/null | sed -n 's/.*interface: *//p' | head -1)
+        [ -n "$_iface" ] && ipconfig getifaddr "$_iface" 2>/dev/null
+    fi
+}
+
 start_sink() {
+    [ -n "$SINK_BIND" ] || SINK_BIND=$(host_ip)
+    [ -n "$SINK_BIND" ] || die "cannot detect a non-loopback address for the sink, set SINK_BIND and SINK_TARGET"
+    [ -n "$SINK_TARGET" ] || SINK_TARGET="$SINK_BIND"
     alloc_port
     SINK_PORT="$ALLOC_PORT"
     SINK_FILE=$(mktemp -t e2e-sink.XXXXXX)
@@ -71,6 +85,13 @@ stop_sink() {
 }
 
 kill_joiners() {
+    if [ -n "$RESOLVER_PID" ]; then
+        kill "$RESOLVER_PID" 2>/dev/null
+        RESOLVER_PID=""
+    fi
+    exec 3>&-
+    rm -f "$JOINER_FIFO"
+    JOINER_FIFO=""
     for _p in $JOINER_PIDS; do kill "$_p" 2>/dev/null; done
     for _p in $JOINER_PIDS; do wait "$_p" 2>/dev/null; done
     JOINER_PIDS=""
@@ -128,6 +149,57 @@ wait_socks() {
         sleep 1
     done
     return 1
+}
+
+resolve_host() {
+    if command -v getent >/dev/null 2>&1; then
+        getent ahostsv4 "$1" 2>/dev/null | awk '{print $1; exit}'
+    elif command -v dig >/dev/null 2>&1; then
+        dig +short A "$1" 2>/dev/null | grep -m1 '^[0-9]'
+    else
+        ping -c1 -W1 "$1" 2>/dev/null | sed -n '1s/.*(\([0-9.]*\)).*/\1/p'
+    fi
+}
+
+answer_resolves() {
+    _lf="$1"
+    _done=0
+    while :; do
+        _total=$(grep -c '^RESOLVE:' "$_lf" 2>/dev/null || true)
+        [ -n "$_total" ] || _total=0
+        while [ "$_done" -lt "$_total" ]; do
+            _done=$((_done + 1))
+            _host=$(grep '^RESOLVE:' "$_lf" | sed -n "${_done}p" | sed 's/^RESOLVE://')
+            _ip=$(resolve_host "$_host")
+            [ -n "$_ip" ] || _ip="0.0.0.0"
+            log "  resolve $_host -> $_ip"
+            printf '%s\n' "$_ip" >&3
+        done
+        sleep 1
+    done
+}
+
+open_captcha() {
+    _lf="$1"
+    _end=$(($(now) + CONNECT_TIMEOUT))
+    while [ "$(now)" -lt "$_end" ]; do
+        _url=$(grep -m1 -o 'CAPTCHA:http://[^[:space:]]*' "$_lf" 2>/dev/null | sed 's/^CAPTCHA://')
+        if [ -n "$_url" ]; then
+            log "  captcha required, opening $_url"
+            if command -v open >/dev/null 2>&1; then
+                open "$_url"
+            elif command -v xdg-open >/dev/null 2>&1; then
+                xdg-open "$_url"
+            else
+                log "  no browser opener on this host, solve it manually at $_url"
+            fi
+            return 0
+        fi
+        nc -z "$PROBE_HOST" "$JOINER_PORT" 2>/dev/null && return 0
+        proc_alive "$JOINER_PID" || return 1
+        sleep 1
+    done
+    return 0
 }
 
 probe_once() {

@@ -34,12 +34,25 @@ function parseAuthError(msg: string): AuthErrorKind | null {
   return null;
 }
 
+async function cookieFileHasCookie(filePath: string, name: string | undefined): Promise<boolean> {
+  if (!name) return false;
+  try {
+    const raw = await fs.readFile(filePath, 'utf8');
+    const entries = JSON.parse(raw) as Array<{ name?: string; value?: string }>;
+    return Array.isArray(entries) && entries.some((entry) => entry.name === name && !!entry.value);
+  } catch {
+    return false;
+  }
+}
+
 export class HeadlessLauncher {
   private relayPath: string;
   private bitrixPath: string;
   private binaryPaths = new Map<Platform, string>();
   private upstreamProxy: UpstreamProxy = { socks: '', user: '', pass: '' };
   private debugLogging = false;
+  private allowPrivateDst = false;
+  private allowLoopbackDst = false;
 
   constructor(
     private host: LauncherHost,
@@ -76,6 +89,14 @@ export class HeadlessLauncher {
     this.debugLogging = enabled;
   }
 
+  setAllowPrivateDst(enabled: boolean): void {
+    this.allowPrivateDst = enabled;
+  }
+
+  setAllowLoopbackDst(enabled: boolean): void {
+    this.allowLoopbackDst = enabled;
+  }
+
   sendLog(tabId: string, msg: string): void {
     const win = this.host.mainWindow;
     if (win && !win.isDestroyed()) {
@@ -101,7 +122,7 @@ export class HeadlessLauncher {
         : RelayMode.VKVideoCreator;
     }
     const relayArgs = ['--mode', relayMode, '--ws-port', String(port)];
-    this.appendUpstreamArgs(relayArgs);
+    this.appendEgressArgs(relayArgs);
     if (this.debugLogging) relayArgs.push('--debug');
     const proc = spawn(this.relayPath, relayArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -134,9 +155,12 @@ export class HeadlessLauncher {
     tab.tunnelMode = config.tunnelMode;
     const cookiesPath = this.cookies.cookieFilePath(platform);
     const dionCookieFile = platform === Platform.Dion ? new DionCookieFile(cookiesPath) : null;
-    const fileHasSession = dionCookieFile != null && await dionCookieFile.hasSession();
+    const fileHasSession =
+      platform === Platform.WBStream
+        ? await cookieFileHasCookie(cookiesPath, config.authCookie)
+        : dionCookieFile != null && (await dionCookieFile.hasSession());
     let cookies = await this.cookies.getCookiesForDomains(config.cookieDomains);
-    const needsLogin = !fileHasSession && !cookies.some((c) => c.name === config.refreshCookie);
+    const needsLogin = !fileHasSession && !cookies.some((c) => c.name === config.authCookie);
     if (needsLogin) {
       if (tab.isBot) {
         const reply = `Please log into ${config.platformName} in the creator app first, then try again.`;
@@ -174,7 +198,7 @@ export class HeadlessLauncher {
     if (joinTarget && config.joinFlag) {
       spawnArgs.push(config.joinFlag, joinTarget);
     }
-    this.appendUpstreamArgs(spawnArgs);
+    this.appendEgressArgs(spawnArgs);
     if (this.debugLogging) spawnArgs.push('--debug');
     const proc = spawn(this.binaryPaths.get(platform)!, spawnArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -193,6 +217,7 @@ export class HeadlessLauncher {
       }
       if (authError === 'expired') {
         if (dionCookieFile) await dionCookieFile.clearTokens();
+        if (platform === Platform.WBStream) await fs.unlink(cookiesPath).catch(() => {});
         await this.cookies.clearAuthCookies(config.cookieDomains, config.authCookie);
         if (this.host.getTab(tabId) === tab) this.startHeadless(tabId, platform, args);
       }
@@ -252,7 +277,7 @@ export class HeadlessLauncher {
     if (joinTarget) {
       spawnArgs.push('--room', joinTarget);
     }
-    this.appendUpstreamArgs(spawnArgs);
+    this.appendEgressArgs(spawnArgs);
     if (this.debugLogging) spawnArgs.push('--debug');
     const proc = spawn(this.bitrixPath, spawnArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -276,7 +301,9 @@ export class HeadlessLauncher {
     });
   }
 
-  private appendUpstreamArgs(args: string[]): void {
+  private appendEgressArgs(args: string[]): void {
+    if (this.allowPrivateDst) args.push('--allow-private-dst');
+    if (this.allowLoopbackDst) args.push('--allow-loopback');
     if (!this.upstreamProxy.socks) return;
     args.push('--upstream-socks', this.upstreamProxy.socks);
     if (this.upstreamProxy.user) args.push('--upstream-user', this.upstreamProxy.user);

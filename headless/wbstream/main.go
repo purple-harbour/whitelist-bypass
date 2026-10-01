@@ -10,6 +10,7 @@ import (
 
 	"whitelist-bypass/relay/common"
 	"whitelist-bypass/relay/tunnel"
+	"whitelist-bypass/relay/tunnel/rtc"
 	"whitelist-bypass/relay/wbstream"
 )
 
@@ -27,9 +28,11 @@ func main() {
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
 	debugFlag := flag.Bool("debug", false, "verbose debug logging")
 	allowPrivate := flag.Bool("allow-private-dst", false, "let the joiner reach private/internal addresses through this creator")
+	allowLoopback := flag.Bool("allow-loopback", false, "let the joiner reach the creator's own loopback through this creator")
 	flag.Parse()
 	common.Debug = *debugFlag
 	common.AllowPrivateDst = *allowPrivate
+	common.AllowLoopbackDst = *allowLoopback
 
 	var readBuf int
 	var memLimit int64
@@ -64,32 +67,14 @@ func main() {
 		log.Fatalf("[auth] --cookies is required")
 	}
 	rawCookies := common.LoadCookies(*cookiesPath)
-	deviceID := common.CookieValue(rawCookies, "__wb_device_id")
-	if deviceID == "" {
-		log.Fatalf("[auth] cookies file is missing __wb_device_id; re-export via creator-app's 'Export Cookies' button")
+	bearer := common.CookieValue(rawCookies, wbstream.AccessTokenEntry)
+	if bearer == "" {
+		common.EmitAuthError(common.AuthErrorSessionExpired)
+		log.Fatalf("[auth] cookies file has no %s, log into WB Stream in the creator app and export the cookies again", wbstream.AccessTokenEntry)
 	}
-	cookieHeader := common.FilterCookies(rawCookies, wbstream.WBStreamCookieAllowlist)
-	persistCookies := func(rotated map[string]string) {
-		if len(rotated) == 0 {
-			return
-		}
-		if werr := common.UpdateCookieFile(*cookiesPath, rotated); werr != nil {
-			log.Printf("[auth] warn: persist rotated cookies: %v", werr)
-			return
-		}
-		rawCookies = common.LoadCookies(*cookiesPath)
-		cookieHeader = common.FilterCookies(rawCookies, wbstream.WBStreamCookieAllowlist)
-		log.Printf("[auth] persisted %d rotated cookie(s)", len(rotated))
-	}
-	bearer, rotated, err := wbstream.RefreshAccessToken(nil, cookieHeader, deviceID)
-	if err != nil {
-		common.EmitAuthErrorFor(err)
-		log.Fatalf("[auth] slide-v3 refresh: %v", err)
-	}
-	persistCookies(rotated)
-	log.Printf("[auth] bearer refreshed (len=%d)", len(bearer))
+	log.Printf("[auth] bearer loaded from cookies file len=%d", len(bearer))
 	requestedRoom := wbstream.ParseRoomID(*roomFlag)
-	roomID, roomToken, accessToken, serverURL, err := wbstream.AuthAsLoggedIn(nil, cookieHeader, bearer, requestedRoom, *displayName)
+	roomID, roomToken, accessToken, serverURL, err := wbstream.AuthAsLoggedIn(nil, bearer, requestedRoom, *displayName)
 	if err != nil {
 		common.EmitAuthErrorFor(err)
 		log.Fatalf("[auth] %v", err)
@@ -131,10 +116,10 @@ func main() {
 			bridgeReadBuf := common.VP8BufSize
 			mode := "video"
 			switch tun.(type) {
-			case *tunnel.DCTunnel:
+			case *rtc.DCTunnel:
 				bridgeReadBuf = readBuf
 				mode = "dc"
-			case *tunnel.MultiTrackKCPTunnel:
+			case *rtc.MultiTrackKCPTunnel:
 				bridgeReadBuf = readBuf
 				mode = "video+kcp"
 			}
@@ -176,15 +161,7 @@ func main() {
 		}
 		time.Sleep(3 * time.Second)
 
-		newBearer, rotated, refreshErr := wbstream.RefreshAccessToken(nil, cookieHeader, deviceID)
-		if refreshErr != nil {
-			log.Printf("[rejoin] slide-v3 refresh failed: %v, retrying in 5s", refreshErr)
-			time.Sleep(5 * time.Second)
-			continue
-		}
-		bearer = newBearer
-		persistCookies(rotated)
-		_, newRoomToken, newAccessToken, newServerURL, err := wbstream.AuthAsLoggedIn(nil, cookieHeader, bearer, roomID, *displayName)
+		_, newRoomToken, newAccessToken, newServerURL, err := wbstream.AuthAsLoggedIn(nil, bearer, roomID, *displayName)
 		if err != nil {
 			log.Printf("[rejoin] auth failed: %v, retrying in 5s", err)
 			time.Sleep(5 * time.Second)
@@ -193,6 +170,6 @@ func main() {
 		roomToken = newRoomToken
 		accessToken = newAccessToken
 		serverURL = newServerURL
-		log.Printf("[rejoin] refreshed token for room=%s server=%s", roomID, serverURL)
+		log.Printf("[rejoin] rejoined room=%s server=%s", roomID, serverURL)
 	}
 }

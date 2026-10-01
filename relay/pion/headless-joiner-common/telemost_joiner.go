@@ -7,18 +7,19 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"whitelist-bypass/relay/common"
+	tmapi "whitelist-bypass/relay/telemost"
+	"whitelist-bypass/relay/tunnel"
+	"whitelist-bypass/relay/tunnel/rtc"
 
 	"github.com/google/uuid"
 	"github.com/kulikov0/headless-client"
 	"github.com/kulikov0/headless-client/webrtc"
 	"github.com/kulikov0/headless-client/websocket"
-	"whitelist-bypass/relay/common"
-	tmapi "whitelist-bypass/relay/telemost"
-	"whitelist-bypass/relay/tunnel"
 )
 
 const (
@@ -59,7 +60,7 @@ type TelemostHeadlessJoiner struct {
 	pubPending   []webrtc.ICECandidateInit
 
 	sampleTrack *webrtc.TrackLocalStaticSample
-	vp8tunnel   *tunnel.VP8DataTunnel
+	vp8tunnel   *rtc.VP8DataTunnel
 	obf         *tunnel.TunnelObfuscator
 	vp8FPS      int
 	vp8Batch    int
@@ -500,13 +501,13 @@ func (j *TelemostHeadlessJoiner) initPC() {
 			j.reconnectAttempt.Store(0)
 			j.logFn("telemost-joiner: === VP8 TUNNEL CONNECTED ===")
 			j.Status.EmitStatus(common.StatusTunnelConnected)
-			j.vp8tunnel = tunnel.NewVP8DataTunnel(j.sampleTrack, j.obf, j.logFn)
+			j.vp8tunnel = rtc.NewVP8DataTunnel(j.sampleTrack, j.obf, j.logFn)
 			vp8tun := j.vp8tunnel
 			vp8tun.Start(j.vp8FPS, j.vp8Batch)
 			var active tunnel.DataTunnel = vp8tun
 			if j.reliable {
-				mt := tunnel.NewMultiTrackTunnel([]*tunnel.VP8DataTunnel{vp8tun})
-				active = tunnel.NewMultiTrackKCPTunnel(mt, j.logFn)
+				mt := rtc.NewMultiTrackTunnel([]*rtc.VP8DataTunnel{vp8tun})
+				active = rtc.NewMultiTrackKCPTunnel(mt, j.logFn)
 				j.logFn("telemost-joiner: per-track kcp reliability active over video tunnel")
 			}
 			if !j.configAck.acknowledged() {
@@ -515,7 +516,7 @@ func (j *TelemostHeadlessJoiner) initPC() {
 					trackCount = 2
 				}
 				acked, cancel := j.configAck.arm()
-				go sendVP8ConfigUntilAcked(acked, cancel, j.stopCh, active,
+				go tunnel.SendVP8ConfigUntilAcked(acked, cancel, j.stopCh, active,
 					vp8tun.FPS(), vp8tun.Batch(), trackCount, j.logFn, "telemost-joiner")
 				j.logFn("telemost-joiner: pushed vp8 config to creator fps=%d batch=%d", vp8tun.FPS(), vp8tun.Batch())
 			}
@@ -918,37 +919,16 @@ func (j *TelemostHeadlessJoiner) parseICEServersFromHello(sh map[string]interfac
 		if u, ok := sm["urls"].([]interface{}); ok {
 			for _, v := range u {
 				if vs, ok := v.(string); ok {
-					urls = append(urls, common.FixICEURL(vs))
+					urls = append(urls, vs)
 				}
 			}
 		}
-		ice := webrtc.ICEServer{URLs: urls}
+		ice := webrtc.ICEServer{URLs: common.ResolveICEHosts(urls, j.ResolveFn, j.logFn, "telemost-joiner")}
 		if u, ok := sm["username"].(string); ok && u != "" {
 			ice.Username = u
 			ice.Credential, _ = sm["credential"].(string)
 		}
 		iceServers = append(iceServers, ice)
-	}
-	resolved := make(map[string]string)
-	for i, s := range iceServers {
-		for k, u := range s.URLs {
-			host := common.ExtractICEHost(u)
-			if host == "" || net.ParseIP(host) != nil {
-				continue
-			}
-			ip, ok := resolved[host]
-			if !ok {
-				var err error
-				ip, err = j.ResolveFn(host)
-				if err != nil {
-					j.logFn("telemost-joiner: resolve ICE host %s failed: %s", common.MaskAddr(host), common.MaskError(err))
-					continue
-				}
-				resolved[host] = ip
-				j.logFn("telemost-joiner: resolved ICE host %s -> %s", host, ip)
-			}
-			iceServers[i].URLs[k] = strings.Replace(u, host, ip, 1)
-		}
 	}
 	j.iceServers = iceServers
 	for i, s := range iceServers {

@@ -2,7 +2,6 @@ package wbstream
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,8 +13,9 @@ import (
 )
 
 const (
-	APIBase = "https://stream.wb.ru"
-	Origin  = "https://stream.wb.ru"
+	APIBase          = "https://stream.wb.ru"
+	Origin           = "https://stream.wb.ru"
+	AccessTokenEntry = "wb_access_token"
 )
 
 // ParseRoomID accepts a bare room id, a wbstream://<id> link, or a
@@ -81,32 +81,6 @@ func httpDo(client *http.Client, req *http.Request) (*http.Response, error) {
 		client = headless.ChromeWindows.HTTPClient()
 	}
 	return client.Do(req)
-}
-
-type cookieTransport struct {
-	base   http.RoundTripper
-	cookie string
-}
-
-func (t *cookieTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.Header.Set("Cookie", t.cookie)
-	base := t.base
-	if base == nil {
-		base = headless.ChromeWindows.HTTPClient().Transport
-	}
-	return base.RoundTrip(req)
-}
-
-func clientWithCookies(client *http.Client, cookieHeader string) *http.Client {
-	if cookieHeader == "" {
-		return client
-	}
-	if client == nil {
-		client = headless.ChromeWindows.HTTPClient()
-	}
-	wrapped := *client
-	wrapped.Transport = &cookieTransport{base: client.Transport, cookie: cookieHeader}
-	return &wrapped
 }
 
 func setBearer(req *http.Request, accessToken string) {
@@ -230,19 +204,11 @@ func AuthAndGetToken(client *http.Client, roomID, displayName string) (string, s
 	return joinAndGetDetails(client, accessToken, roomID, displayName)
 }
 
-func AuthAsLoggedIn(client *http.Client, cookieHeader, accessToken, roomID, displayName string) (string, string, string, string, error) {
-	if cookieHeader == "" && accessToken == "" {
-		return "", "", "", "", fmt.Errorf("cookies or access token required for logged-in auth")
+func AuthAsLoggedIn(client *http.Client, accessToken, roomID, displayName string) (string, string, string, string, error) {
+	if accessToken == "" {
+		return "", "", "", "", fmt.Errorf("access token required for logged-in auth")
 	}
-	client = clientWithCookies(client, cookieHeader)
 	return joinAndGetDetails(client, accessToken, roomID, displayName)
-}
-
-var WBStreamCookieAllowlist = []string{
-	"wbx-refresh",
-	"x_wbaas_token",
-	"_wbauid",
-	"wbx-validation-key",
 }
 
 var ModeratorPermissions = []string{
@@ -254,63 +220,6 @@ var ModeratorPermissions = []string{
 	"ROOM_PERMISSION_MODERATE_ROOM",
 	"ROOM_PERMISSION_CALL_DATA_ACCESS",
 	"ROOM_PERMISSION_LOCAL_RECORD",
-}
-
-type slideV3Response struct {
-	Payload struct {
-		AccessToken string `json:"access_token"`
-	} `json:"payload"`
-}
-
-func newRequestID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "00000000-0000-0000-0000-000000000000"
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
-func RefreshAccessToken(client *http.Client, cookieHeader, deviceID string) (string, map[string]string, error) {
-	req, err := http.NewRequest(http.MethodPost, "https://auth-stream.wb.ru/v2/auth/slide-v3", bytes.NewReader(nil))
-	if err != nil {
-		return "", nil, err
-	}
-	if deviceID == "" {
-		deviceID = newRequestID()
-	}
-	req.Header.Set("wb-apptype", "web")
-	req.Header.Set("X-Real-IP", "")
-	req.Header.Set("deviceId", deviceID)
-	req.Header.Set("X-Request-ID", newRequestID())
-	req.Header.Set("Origin", Origin)
-	req.Header.Set("Referer", Origin+"/")
-	req.Header.Set("Cookie", cookieHeader)
-
-	resp, err := httpDo(client, req)
-	if err != nil {
-		return "", nil, err
-	}
-	defer resp.Body.Close()
-	rotated := make(map[string]string)
-	for _, ck := range resp.Cookies() {
-		if ck.Value != "" {
-			rotated[ck.Name] = ck.Value
-		}
-	}
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("slide-v3: status %d: %s", resp.StatusCode, string(raw))
-	}
-	var r slideV3Response
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return "", nil, fmt.Errorf("slide-v3 decode: %w", err)
-	}
-	if r.Payload.AccessToken == "" {
-		return "", nil, fmt.Errorf("slide-v3: empty access_token in response: %s", string(raw))
-	}
-	return r.Payload.AccessToken, rotated, nil
 }
 
 func joinAndGetDetails(client *http.Client, accessToken, roomID, displayName string) (string, string, string, string, error) {

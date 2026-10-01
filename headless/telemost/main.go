@@ -940,9 +940,11 @@ func main() {
 	upstreamPass := flag.String("upstream-pass", "", "upstream SOCKS5 password")
 	debugFlag := flag.Bool("debug", false, "verbose debug logging")
 	allowPrivate := flag.Bool("allow-private-dst", false, "let the joiner reach private/internal addresses through this creator")
+	allowLoopback := flag.Bool("allow-loopback", false, "let the joiner reach the creator's own loopback through this creator")
 	flag.Parse()
 	common.Debug = *debugFlag
 	common.AllowPrivateDst = *allowPrivate
+	common.AllowLoopbackDst = *allowLoopback
 
 	var readBuf int
 	var memLimit int64
@@ -993,12 +995,10 @@ func main() {
 	}
 
 	log.Println("[config] Fetching live config from Telemost bundle...")
-	cfg, err := fetchConfig()
-	if err != nil {
-		log.Fatalf("[config] %v", err)
-	}
+	cfg := fetchConfig()
 
 	var connInfo *ConnInfo
+	var err error
 	if *tmLink != "" {
 		connInfo, err = joinExistingConference(cookieStr, *tmLink, cfg)
 		if err != nil {
