@@ -157,6 +157,7 @@ npm run build 2>&1
 PRODUCT_NAME="$(node -p "require('$CREATOR_DIR/package.json').build.productName")"
 APP_VERSION="$(node -p "require('$CREATOR_DIR/package.json').version")"
 
+if [ "$(uname)" = "Darwin" ]; then
 # macOS x64
 echo ""
 echo "--- macOS x64 ---"
@@ -172,6 +173,7 @@ stage_darwin_binaries arm64
 rm -f "$PREBUILTS/$PRODUCT_NAME-$APP_VERSION-arm64.dmg"
 npx electron-builder --mac --arm64
 verify_artifact "$PRODUCT_NAME-$APP_VERSION-arm64.dmg"
+fi
 
 # Windows x64
 echo ""
